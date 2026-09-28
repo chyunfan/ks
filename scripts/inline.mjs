@@ -13,9 +13,22 @@ if (!fs.existsSync(indexPath)) {
 
 let html = fs.readFileSync(indexPath, 'utf8');
 
+// 资源地址 → 本地文件路径
+// 兼容三种写法：
+//   './assets/x.js'                     （base: './'）
+//   '/assets/x.js'                      （base: '/'）
+//   '/credit-exam-cloud/assets/x.js'    （base: '/credit-exam-cloud/'，本项目的实际配置）
 function toLocal(href) {
-  const clean = href.replace(/^\.?\//, '');
-  return path.join(dist, clean);
+  const clean = String(href).replace(/^\.?\//, '');
+  const direct = path.join(dist, clean);
+  if (fs.existsSync(direct)) return direct;
+  // base 带子路径时，去掉第一段再试
+  const parts = clean.split('/');
+  if (parts.length > 1) {
+    const stripped = path.join(dist, parts.slice(1).join('/'));
+    if (fs.existsSync(stripped)) return stripped;
+  }
+  return direct;
 }
 
 // 1) 内联 <link rel="stylesheet">
@@ -44,6 +57,22 @@ html = html.replace(/<script[^>]*src="([^"]+)"[^>]*>\s*<\/script>/gi, (tag, src)
 fs.writeFileSync(indexPath, html, 'utf8');
 const kb = (Buffer.byteLength(html) / 1024).toFixed(1);
 console.log(`[inline] 内联 CSS ${cssCount} 个 / JS ${jsCount} 个 → dist/index.html (${kb} KB)`);
+
+// 3) 安全网：内联后必须「零外链」。
+// 这条断言是 v2.24 加的，起因是一次真实的线上事故：构建只跑了 vite build（没有内联），
+// 产物里 index.html 引用 /credit-exam-cloud/assets/xxx；而应用被网关换到了 /ks 访问，
+// 浏览器就去 /credit-exam-cloud/assets/xxx 取样式 → 命中另一个已暂停的部署 → 503 →
+// 整页没有任何样式（裸 HTML）。
+// 只要内联到位，资源路径就与「部署在哪个子路径」彻底解耦。
+// 万一哪天内联没生效，这里直接让构建失败，而不是把裸页面发到线上。
+const leftovers = [...html.matchAll(/<script[^>]*\ssrc="([^"]+)"/gi)].map(m => m[1])
+  .concat([...html.matchAll(/<link[^>]*rel="stylesheet"[^>]*href="([^"]+)"/gi)].map(m => m[1]));
+if (leftovers.length) {
+  console.error('[inline] ✗ 失败：内联后仍残留外链资源，构建中止');
+  leftovers.forEach(u => console.error('        → ' + u));
+  process.exit(1);
+}
+console.log('[inline] ✓ 校验通过：dist/index.html 零外链（可部署在任意子路径）');
 
 // 3) 尝试清理已内联的 assets 目录（沙箱可能拦截删除，失败则忽略）
 try {

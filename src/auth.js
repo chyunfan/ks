@@ -4,30 +4,58 @@ import { setToken, getToken } from './supabase.js';
 // 构建标识：页面会显示出来，用于确认「浏览器跑的是不是最新版」
 // （改代码后务必同步更新这里，便于一眼看出缓存问题）
 // ============================================================
-export const BUILD_TAG = 'v2.23 · 2026-09-28';
+export const BUILD_TAG = 'v2.24 · 2026-09-28';
 
 // ============================================================
 // 后端接口地址（候选列表，自动回退）
 // ------------------------------------------------------------
-// 本应用存在两种访问形态：
-//   A. 被网关 rewrites 代理到子路径：https://www.chyunfan.cn/credit-exam-cloud
-//      → 接口必须是 /credit-exam-cloud/api/xxx（网关按前缀转发到 Vercel）
-//   B. 直接访问 Vercel：https://credit-exam-cloud.vercel.app
-//      → /api/xxx 可用；带前缀的 /credit-exam-cloud/api/xxx 由项目内 rewrite 兜住，也可用
+// 本应用有三种访问形态：
+//   A. 被网关 rewrites 代理到子路径：https://www.chyunfan.cn/ks
+//      → 接口必须是 /ks/api/xxx（网关按前缀转发到 Vercel）
+//   B. 被网关代理到另一个子路径：https://www.chyunfan.cn/credit-exam-cloud
+//   C. 直接访问 Vercel：https://credit-exam-cloud.vercel.app
+//      → /api/xxx 可用；带前缀的 /xxx/api/xxx 由项目内 rewrite 兜住，也可用
 //
-// 历史上踩过的坑：base 配成 './' 时，页面在无尾斜杠的 /credit-exam-cloud 下会把
-// ./api/login 解析成站点根 /api/login → 命中网关 404 页 → 前端 JSON.parse 报
-// "Unexpected token 'T', "The page c"... is not valid JSON"。
-// 所以这里不再只认一个地址，而是给出候选列表逐个尝试，命中 JSON 即成功。
+// 历史上踩过的两个坑（同一个根因：**构建期写死的前缀 ≠ 实际访问路径**）：
+//   1) base 配成 './' 时，页面在无尾斜杠的 /credit-exam-cloud 下会把 ./api/login
+//      解析成站点根 /api/login → 命中网关 404 页 → 前端 JSON.parse 报
+//      "Unexpected token 'T', "The page c"... is not valid JSON"。
+//   2) v2.24：应用被挪到 /ks 访问后，页面仍按构建期的 /credit-exam-cloud 调接口，
+//      打到另一个已暂停的部署上（503 HTML）→ 登录直接失败。
+//
+// 结论：前缀不能再信构建期常量。**以「页面自己实际所在的路径」为准**永远正确 ——
+// 页面在 /ks，接口就是 /ks/api/xxx；页面在站点根，接口就是 /api/xxx。
+// 仍然保留候选列表逐个尝试（命中 JSON 即成功），这样任何部署方式都不会全盘卡死。
 // ============================================================
 const BASE_PREFIX = (import.meta.env.BASE_URL || '/').replace(/\/+$/, '');
+
+/**
+ * 运行时推导当前页面所在的部署前缀。
+ *   /ks                → '/ks'
+ *   /ks/               → '/ks'
+ *   /ks/index.html     → '/ks'
+ *   /credit-exam-cloud → '/credit-exam-cloud'
+ *   /                  → ''（部署在站点根）
+ */
+function runtimePrefix() {
+  try {
+    let p = String(location.pathname || '/');
+    p = p.replace(/\/index\.html?$/i, '');
+    p = p.replace(/\/+$/, '');
+    return p === '/' ? '' : p;
+  } catch (e) {
+    return '';
+  }
+}
 
 export function apiCandidates(path) {
   const p = String(path || '');
   const tail = p.startsWith('/') ? p : '/' + p;
   const list = [];
-  if (BASE_PREFIX) list.push(BASE_PREFIX + tail);
-  if (!list.includes(tail)) list.push(tail);
+  const rt = runtimePrefix();
+  if (rt) list.push(rt + tail);               // ① 页面实际所在的子路径（最可靠）
+  if (!list.includes(tail)) list.push(tail);  // ② 站点根（直连 Vercel / 部署在根时）
+  if (BASE_PREFIX && !list.includes(BASE_PREFIX + tail)) list.push(BASE_PREFIX + tail);  // ③ 构建期前缀（兜底）
   return list;
 }
 

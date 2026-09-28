@@ -3,10 +3,22 @@
   "buildCommand": "vite build",
   "outputDirectory": "dist",
   "framework": "vite",
-  "rewrites": [
+  "redirects": [
+    {
+      "source": "/credit-exam-cloud",
+      "destination": "/ks",
+      "permanent": false
+    },
     {
       "source": "/credit-exam-cloud/:path*",
-      "destination": "/:path*"
+      "destination": "/ks/:path*",
+      "permanent": false
+    }
+  ],
+  "rewrites": [
+    {
+      "source": "/ks/:path*",
+      "destination": "/index.html"
     }
   ],
   "headers": [
@@ -19,11 +31,11 @@
       "headers": [{ "key": "Cache-Control", "value": "no-store, must-revalidate" }]
     },
     {
-      "source": "/credit-exam-cloud",
+      "source": "/ks",
       "headers": [{ "key": "Cache-Control", "value": "no-store, must-revalidate" }]
     },
     {
-      "source": "/credit-exam-cloud/index.html",
+      "source": "/ks/index.html",
       "headers": [{ "key": "Cache-Control", "value": "no-store, must-revalidate" }]
     },
     {
@@ -31,7 +43,7 @@
       "headers": [{ "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }]
     },
     {
-      "source": "/credit-exam-cloud/assets/:path*",
+      "source": "/ks/assets/:path*",
       "headers": [{ "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }]
     }
   ],

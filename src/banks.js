@@ -3,9 +3,11 @@ import { supabase, getUserId } from './supabase.js';
 import { parseWorkbook, buildTemplateWorkbook, buildBankWorkbook } from './import.js';
 import { getUsername } from './auth.js';
 import { isAdmin, knownTags, ensureUsers } from './admin.js';
+import { openQEdit } from './qedit.js';
 
 let pendingImport = null;   // { questions, caseCount }
 let onOpenBank = null;
+let onOpenTyping = null;    // 下拉里选中「打字练习」后跳去哪（由 main.js 注入）
 
 // 正在设置「可见范围」的题库 + 当前勾选的部门/角色
 let scopeBank = null;
@@ -14,6 +16,7 @@ let scopeRoles = [];
 
 export function initBanks(cb) {
   onOpenBank = cb.onOpenBank;
+  onOpenTyping = cb.onOpenTyping;
 
   document.getElementById('importBtn').addEventListener('click', () => document.getElementById('fileInput').click());
   document.getElementById('tplBtn').addEventListener('click', () => {
@@ -24,6 +27,15 @@ export function initBanks(cb) {
   document.getElementById('importMask').addEventListener('click', closeImport);
   document.getElementById('saveBankBtn').addEventListener('click', saveImport);
   bindScopeModal();
+
+  // 顶栏「练习内容」→ 弹出切换列表（点完直接进该内容的练习首页，不必先退回题库列表）
+  const sw = document.getElementById('bankSwitch');
+  if (sw) sw.addEventListener('click', openBankPicker);
+  const bpClose = document.getElementById('bankPickClose');
+  if (bpClose) bpClose.addEventListener('click', closeBankPicker);
+  const bpMask = document.getElementById('bankPickMask');
+  if (bpMask) bpMask.addEventListener('click', closeBankPicker);
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeBankPicker(); });
 }
 
 async function onFile(e) {
@@ -144,7 +156,8 @@ function bankRow(b) {
   const own = canManage(b);
   const acts = [];
   acts.push('<button class="btn btn-primary btn-sm act-open" type="button">练习</button>');
-  // 他人的题库：非管理员只给「练习」——不出现重命名 / 导出 / 删除 / 可见范围
+  // 他人的题库：非管理员只给「练习」——不出现编辑题目 / 重命名 / 导出 / 删除 / 可见范围
+  if (own) acts.push('<button class="btn btn-ghost btn-sm act-edit" type="button">编辑题目</button>');
   if (own) acts.push('<button class="btn btn-ghost btn-sm act-rename" type="button">重命名</button>');
   if (own) acts.push('<button class="btn btn-ghost btn-sm act-export" type="button">导出</button>');
   if (adm) acts.push('<button class="btn btn-ghost btn-sm act-scope" type="button">可见范围</button>');
@@ -187,6 +200,7 @@ export async function renderBanks() {
     const b = banks.find(x => x.id === id);
     const on = (sel, fn) => { const el = row.querySelector(sel); if (el) el.addEventListener('click', fn); };
     on('.act-open', () => openBank(b));
+    on('.act-edit', () => editQuestions(b));
     on('.act-rename', () => renameBank(b));
     on('.act-export', () => exportBank(b));
     on('.act-scope', () => openScope(b));
@@ -232,6 +246,16 @@ async function exportBank(b) {
   if (error) { alert('导出失败：' + error.message); return; }
   const wb = buildBankWorkbook(data.questions || []);
   XLSX.writeFile(wb, (b.name || '题库') + '.xlsx');
+}
+
+/**
+ * 打开题目编辑器。
+ * 只改题目内容，不碰 name/可见范围等元信息，所以权限口径与重命名/导出一致（canManage）：
+ * 上传者本人或管理员可用，其他人只能练习（数据库侧的 update 策略是第三道闸）。
+ */
+async function editQuestions(b) {
+  if (!canManage(b)) { denyManage(b); return; }
+  await openQEdit(b, () => canManage(b));
 }
 
 // ============================================================
@@ -369,11 +393,151 @@ function scopeMsg(t, bad) {
   el.style.color = bad ? 'var(--bad)' : '';
 }
 
+// ============================================================
+// 切换练习内容（点顶栏「练习内容」）
+// ============================================================
+/** 当前正在练的那一份（与 boot() 启动时读的是同一个键） */
+function currentBankId() {
+  try {
+    const v = JSON.parse(localStorage.getItem('ce_current_bank') || 'null');
+    return v && v.id ? String(v.id) : '';
+  } catch (e) { return ''; }
+}
+
+function closeBankPicker() {
+  const m = document.getElementById('bankPick');
+  if (m) m.classList.add('hide');
+}
+
+/** 现在是不是待在「打字练习」那几屏（字库列表 / 练习记录 / 打字屏） */
+function isOnTypingScreen() {
+  return ['hzk', 'tprec', 'typing'].some(id => {
+    const el = document.getElementById(id);
+    return el && !el.classList.contains('hide');
+  });
+}
+
+/**
+ * 是否正卡在「练习中」——做题的练习页 / 结果页，或打字练习屏。
+ * 这时候换内容会出事：
+ *   · 做题那边，继续练习是按 id 从**当前**题库里筛题，而不同题库的题号会重复（都是 1、2、3…），
+ *     拿新库的题去对旧库的快照，题就全错位了；
+ *   · 打字那边，中途换内容，这一轮跟打就断了。
+ * 所以这一刻只拦、不给换（顶栏按钮同时变灰）。做题进度本来就已经落盘，退出后照旧能「继续练习」。
+ */
+function busyPracticing() {
+  return ['practice', 'result', 'typing'].some(id => {
+    const el = document.getElementById(id);
+    return el && !el.classList.contains('hide');
+  });
+}
+
+function pickRow(b, hideCur) {
+  // 正在打字练习里时，题库行不标「当前」——这一刻的当前内容是打字练习，两边都标会打架
+  const cur = !hideCur && currentBankId() === String(b.id);
+  const meta = [b.count + ' 题', '案例 ' + b.caseCount + ' 组',
+    '上传者：' + esc(b.ownerName || '未知') + (b.mine ? '（我）' : '')].join(' · ');
+  return '<button type="button" class="pick-row' + (cur ? ' on' : '') + '"'
+    + ' data-id="' + esc(b.id) + '" data-cur="' + (cur ? '1' : '0') + '">'
+    + '<span class="pick-main">'
+    + '<span class="pick-name">' + esc(b.name) + visTag(b) + '</span>'
+    + '<span class="pick-meta">' + meta + '</span>'
+    + '</span>'
+    + (cur ? '<span class="pick-flag">当前</span>' : '')
+    + '</button>';
+}
+
+/**
+ * 下拉最上面的「打字练习」入口。
+ * 它不是题库（字库是另一套数据、另一套流程），所以不跟题库混排，单独一组摆最前，
+ * 免得让人以为它也是一份题库。选中后交给 main.js 跳到打字练习那几屏。
+ */
+function pickTypingRow() {
+  const cur = isOnTypingScreen();
+  return '<button type="button" class="pick-row pick-typing' + (cur ? ' on' : '') + '"'
+    + ' data-typing="1" data-cur="' + (cur ? '1' : '0') + '">'
+    + '<span class="pick-ic" aria-hidden="true">⌨</span>'
+    + '<span class="pick-main">'
+    + '<span class="pick-name">打字练习</span>'
+    + '<span class="pick-meta">按字库逐字跟打 · 五笔编码提示 · 成绩存云端</span>'
+    + '</span>'
+    + (cur ? '<span class="pick-flag">当前</span>' : '')
+    + '</button>';
+}
+
+/**
+ * 打开「选择练习内容」弹层。
+ * 题库部分的口径与「管理题库」完全一致（同一个 listBanks，可见范围由 RLS 决定）——
+ * 看不到的题库本来就不该出现在切换列表里。
+ */
+export async function openBankPicker() {
+  const modal = document.getElementById('bankPick');
+  const box = document.getElementById('bankPickList');
+  const hint = document.getElementById('bankPickHint');
+  if (!modal || !box) return;
+  // 第二道闸：顶栏按钮已经变灰，这里再拦一次（DOM 被改写也换不了库）
+  if (busyPracticing()) {
+    alert('正在练习中，先点「← 退出」回到首页再切换练习内容。\n\n'
+      + '（为什么不让直接换：不同题库的题号会重复，中途换库会让这次的作答记录对不上题；'
+      + '打字练习打了一半换内容，这一轮也就断了。）\n'
+      + '做题进度已经保存，退出后点「继续练习」就能接着做。');
+    return;
+  }
+  box.innerHTML = '<div class="muted" style="padding:12px 0;text-align:center">正在加载…</div>';
+  hint.textContent = '';
+  modal.classList.remove('hide');
+  let banks = [];
+  try { banks = await listBanks(); } catch (e) { banks = []; }
+
+  const onTyping = isOnTypingScreen();
+  const mine = banks.filter(b => b.mine);
+  const shared = banks.filter(b => !b.mine);
+  // 打字练习固定排最前，单独一组：它是「另一类练习」，混进题库分组会让人以为它也是一份题库
+  let html = '<div class="list-head">其他练习</div>' + pickTypingRow();
+  if (mine.length) html += '<div class="list-head">我上传的（' + mine.length + '）</div>' + mine.map(b => pickRow(b, onTyping)).join('');
+  if (shared.length) html += '<div class="list-head">其他人上传的（' + shared.length + '）</div>' + shared.map(b => pickRow(b, onTyping)).join('');
+  // 一个题库都没有时，打字练习也必须还在（它不走题库表，不该被一起藏掉）
+  if (!banks.length) {
+    html += '<div class="muted" style="padding:12px 0 0;font-size:12px">'
+      + '还没有可练的题库。点右上角「管理题库」导入一份吧。</div>';
+  }
+  hint.textContent = banks.length
+    ? '共 ' + banks.length + ' 份题库 + 打字练习；点一下即可切换。'
+      + '错题集、收藏、进度、组卷设置都按题库各自保存，互不影响。'
+    : '还没有可练的题库，先试试打字练习吧。';
+  box.innerHTML = html;
+  box.querySelectorAll('.pick-row').forEach(row => {
+    row.addEventListener('click', async () => {
+      if (row.dataset.typing === '1') {
+        if (row.dataset.cur === '1') { closeBankPicker(); return; }   // 已经在打字练习里：只关掉
+        closeBankPicker();                                            // 先收起弹层，再切屏
+        if (onOpenTyping) onOpenTyping();
+        return;
+      }
+      const b = banks.find(x => String(x.id) === row.dataset.id);
+      if (!b) return;
+      if (row.dataset.cur === '1') { closeBankPicker(); return; }   // 点的就是当前那份：只关掉，不重载
+      closeBankPicker();                                            // 先收起弹层，再去取题（弹层别压在页面上）
+      await openBank(b);                                            // 内部查 questions 并回调 onOpenBank
+    });
+  });
+}
+
 function esc(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
 // 验收脚本用：把权限口径暴露出来，Playwright 可直接断言（与 window.__exam 同一套做法）
-if (typeof window !== 'undefined') {
-  window.__banks = { renderBanks, canManage };
+// import.meta.env.DEV 在 vite build 时被替换为 false，整块会被剔除，不会进生产包。
+if (import.meta.env.DEV) {
+  // find / editQuestions 用于验收「第二道闸」：绕开按钮直接调内部入口，看守卫拦不拦得住
+  window.__banks = {
+    renderBanks, canManage, editQuestions,
+    find: async id => (await listBanks()).find(x => x.id === id),
+    // 顶栏切换练习内容：openBankPicker 是内部入口、listBanks 是数据源、currentBankId 读当前选中
+    openBankPicker, listBanks, currentBankId,
+    closeBankPicker,
+    // 打字练习入口：当前是否在打字那几屏 / 是否卡在练习中
+    isOnTypingScreen, busyPracticing
+  };
 }

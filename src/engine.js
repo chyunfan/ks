@@ -1094,14 +1094,16 @@ function prev() { if (S.idx > 0) { S.idx--; renderQuestion(); window.scrollTo({ 
 
 // ---------- finish ----------
 function finishSequential() {
-  let right = 0, answered = 0;
+  let right = 0;
   for (let i = 0; i < S.pool.length; i++) {
-    const a = S.userAns[i];
-    if (a !== null && !(Array.isArray(a) && a.length === 0)) answered++;
     if (isCorrect(S.pool[i], i)) right++;
   }
-  const wrong = S.pool.length - answered;
-  showResult(right, right, wrong, S.pool.length, '顺序练习完成', false);
+  // 答错 = 总题数 − 答对。这里面既含「作答了但错」，也含「跳过去没答」——两者同样算没做对，
+  // 口径才能和结果页下方的错题清单、错题集里的条目完全对齐（三格也能对上：总 = 对 + 错）。
+  // 旧写法是 pool.length − answered（只数「一个字没写」的题），全做完时未答恒为 0 → 答错永远显示 0。
+  const wrong = S.pool.length - right;
+  // 标题按当前模式取：错题练习/收藏练习走的是同一个函数，写死「顺序练习完成」会驴唇不对马嘴
+  showResult(right, right, wrong, S.pool.length, (MODE_NAME[S.mode] || '顺序练习') + '完成', false);
 }
 function finishExam(auto) {
   stopTimer();
@@ -1491,6 +1493,8 @@ if (import.meta.env.DEV) {
     examPlan, examFullScore, fitToTotal, availByType, S,
     renderSheet, markOf, setMark, markCount, clearMarks,
     usedMs, clockText, humanDuration, analysisStat,
-    defaultPrefs: DEFAULT_PREFS, prefsKey, syncPrefsFromCloud, applySettings
+    defaultPrefs: DEFAULT_PREFS, prefsKey, syncPrefsFromCloud, applySettings,
+    // 「当前装的是哪个题库的题」——切题库的验收要断言这一点（QUESTIONS 会随 setQuestions 变）
+    questions: () => QUESTIONS
   };
 }

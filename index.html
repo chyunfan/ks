@@ -38,13 +38,17 @@
         <span class="logo sm">学</span>
         <div>
           <div class="tb-title">云题库 · 练习</div>
-          <div class="tb-sub">当前题库：<b id="topBankName">—</b></div>
+          <!-- 「练习内容」可点：点开弹层直接换一份题库，不必先退回题库列表 -->
+          <div class="tb-sub">练习内容：<button type="button" class="tb-switch" id="bankSwitch" title="点击切换练习内容" aria-haspopup="dialog"><b id="topBankName">—</b><span class="tb-switch-arr" aria-hidden="true">▾</span></button></div>
         </div>
       </div>
       <div class="tb-right">
         <span class="muted tb-user" id="topUser"></span>
         <button class="btn btn-ghost btn-sm" id="toBanks" type="button" title="管理题库">
           <span class="tb-long">管理题库</span><span class="tb-short">题库</span>
+        </button>
+        <button class="btn btn-ghost btn-sm" id="toTyping" type="button" title="打字练习（字库）">
+          <span class="tb-long">打字练习</span><span class="tb-short">打字</span>
         </button>
         <button class="btn btn-ghost btn-sm hide" id="toAdmin" type="button" title="用户管理（管理员）">
           <span class="tb-long">用户管理</span><span class="tb-short">用户</span>
@@ -68,6 +72,98 @@
           <div class="muted" style="margin-top:8px">题型仅限 单选 / 多选 / 判断 / 案例；选项最多 A–F。点「下载空模板」查看格式。</div>
         </div>
         <div id="bankList"></div>
+      </div>
+    </div>
+
+    <!-- 打字练习 · 字库管理 -->
+    <div id="hzk" class="hide">
+      <div class="card">
+        <div class="section">
+          <h2>字库 <span class="muted" style="font-size:12px;font-weight:400">打字练习用</span></h2>
+          <div class="muted" style="margin-bottom:10px">
+            字库就是「打字练习的题库」：导入一段文字，按每行固定字数切开，一行一行对照着打。
+            管理员上传的、个人上传的字库<b>默认都是所有人可见、所有人可修改</b>，列表里用徽章区分来源。
+          </div>
+          <div class="hzk-actions">
+            <button id="hzkImportBtn" class="btn btn-primary" type="button">导入字库</button>
+            <button id="toRecords" class="btn btn-ghost" type="button">练习记录</button>
+            <span id="hzkMsg" class="muted"></span>
+          </div>
+        </div>
+        <div id="hzkList"></div>
+      </div>
+    </div>
+
+    <!-- 打字练习 · 练习记录 -->
+    <div id="tprec" class="hide">
+      <div class="card">
+        <div class="section">
+          <h2>练习记录</h2>
+          <div class="admin-bar">
+            <span class="muted" id="tprecScope"></span>
+            <input id="tprecSearch" class="field hide" placeholder="筛选账号 / 字库名">
+            <button id="tprecReload" class="btn btn-ghost btn-sm" type="button">刷新</button>
+          </div>
+        </div>
+        <div id="tprecList"></div>
+        <div style="display:flex;margin-top:12px">
+          <button type="button" class="btn-quit" id="tprecBack" style="flex:1;justify-content:center">← 返回字库</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 打字练习 · 练习屏 -->
+    <div id="typing" class="hide">
+      <div class="card">
+        <div class="tp-bar">
+          <div class="tp-head">
+            <span class="tp-hz" id="tpHzkName">—</span>
+            <span class="tp-hint" id="tpHintWrap">
+              <input type="checkbox" id="tpHintOn"><label for="tpHintOn">编码提示</label>
+              <b id="tpHintCode">—</b><span id="tpHintChar"></span><span id="tpHintAlt"></span>
+            </span>
+            <span class="tp-grow"></span>
+            <button class="btn btn-ghost btn-sm" id="tpBack" type="button">← 返回字库</button>
+          </div>
+          <div class="tp-opts">
+            <label>字体
+              <select id="tpFontSel">
+                <option value="simsun">宋体</option>
+                <option value="kaiti">楷体</option>
+                <option value="heiti">黑体</option>
+                <option value="yahei">微软雅黑</option>
+              </select>
+            </label>
+            <label>视图
+              <select id="tpViewSel">
+                <option value="all">全文对照</option>
+                <option value="single">单行对照</option>
+              </select>
+            </label>
+            <label>每行
+              <select id="tpPerLine"></select> 字
+            </label>
+            <label class="tp-limit"><input type="checkbox" id="tpLimitOn"> 限时
+              <input type="number" id="tpLimitMin" min="1" max="120" value="5"> 分钟
+            </label>
+          </div>
+          <div class="tp-stats">
+            <span class="tp-stat"><i class="dot g"></i>时间 <b id="tpStTime">00:00:00</b></span>
+            <span class="tp-stat"><i class="dot p"></i>速度 <b id="tpStSpeed">0字/分</b></span>
+            <span class="tp-stat"><i class="dot t"></i>已打正确 <b id="tpStOk">0</b> 字</span>
+            <span class="tp-stat"><i class="dot b"></i>进度 <b id="tpStProg">0%</b></span>
+            <span class="tp-stat"><i class="dot o"></i>正确率 <b id="tpStAcc">100%</b></span>
+          </div>
+        </div>
+        <div id="tpArticle">
+          <div id="tpLines"></div>
+          <input id="tpGhost" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+        </div>
+        <div class="tp-foot">
+          <button class="btn btn-ghost btn-sm" id="tpPause" type="button">⏸ 暂停</button>
+          <button class="btn btn-ghost btn-sm" id="tpRestart" type="button">↺ 重打</button>
+          <button class="btn btn-primary btn-sm" id="tpStop" type="button">结束本次</button>
+        </div>
       </div>
     </div>
 
@@ -306,6 +402,18 @@
   </div>
 </div>
 
+<!-- 切换练习内容（点顶栏「练习内容」打开） -->
+<div class="modal hide" id="bankPick">
+  <div class="modal-mask" id="bankPickMask"></div>
+  <div class="modal-box">
+    <div class="modal-head"><span>选择练习内容</span><button class="modal-x" id="bankPickClose" type="button">✕</button></div>
+    <div class="modal-body">
+      <div class="muted" id="bankPickHint" style="font-size:12px;margin-bottom:10px"></div>
+      <div id="bankPickList"></div>
+    </div>
+  </div>
+</div>
+
 <!-- 导入弹层 -->
 <div class="modal hide" id="importModal">
   <div class="modal-mask" id="importMask"></div>
@@ -351,6 +459,139 @@
       <div class="scope-foot">
         <button class="btn btn-ghost" id="scopeCancel" type="button">取消</button>
         <button class="btn btn-primary" id="scopeSave" type="button">保存</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 题目编辑弹层（题库上传者 / 管理员） -->
+<div class="modal hide" id="qeModal">
+  <div class="modal-mask" id="qeMask"></div>
+  <div class="modal-box qe-box">
+    <div class="modal-head">
+      <span>编辑题目 · <b id="qeBankName">—</b></span>
+      <button class="modal-x" id="qeClose" type="button">✕</button>
+    </div>
+    <div class="qe-bar">
+      <button class="btn btn-ghost btn-sm" id="qePrev" type="button">← 上一题</button>
+      <span class="qe-pos">第 <input id="qeJump" class="qe-jump" type="number" min="1" inputmode="numeric"> / <b id="qeTotal">0</b> 题</span>
+      <button class="btn btn-ghost btn-sm" id="qeNext" type="button">下一题 →</button>
+    </div>
+    <div class="qe-filter">
+      <div class="chips" id="qeTypeChips">
+        <span class="chip active" data-t="all">全部</span>
+        <span class="chip" data-t="single">单选</span>
+        <span class="chip" data-t="multiple">多选</span>
+        <span class="chip" data-t="judge">判断</span>
+        <span class="chip" data-t="case">案例</span>
+      </div>
+      <label class="qe-onlymod"><input type="checkbox" id="qeOnlyMod"> 只看改过的</label>
+    </div>
+    <div class="modal-body qe-body" id="qeBody"></div>
+    <div class="qe-foot">
+      <div class="qe-status" id="qeStatus"></div>
+      <div class="qe-foot-btns">
+        <button class="btn btn-ghost btn-sm" id="qeRevert" type="button">撤销本题</button>
+        <button class="btn btn-ghost btn-sm" id="qeRevertAll" type="button">全部还原</button>
+        <button class="btn btn-primary btn-sm" id="qeSave" type="button">保存到题库</button>
+      </div>
+      <div class="qe-savemsg" id="qeMsg"></div>
+    </div>
+  </div>
+</div>
+
+<!-- 导入字库弹层 -->
+<div class="modal hide" id="hzkImportModal">
+  <div class="modal-mask" id="hzkImportMask"></div>
+  <div class="modal-box">
+    <div class="modal-head"><span>导入字库</span><button class="modal-x" id="hzkImportClose" type="button">✕</button></div>
+    <div class="modal-body">
+      <textarea id="hzkImportText" class="tp-textarea" placeholder="把要练的文字粘贴到这里…"></textarea>
+      <div class="row2">
+        <label>字库名称 <input id="hzkImportName" class="field" style="width:150px" autocomplete="off"></label>
+        <label>每行字数 <select id="hzkImportPerLine" class="field" style="width:90px"></select></label>
+        <span class="muted" style="font-size:12px">留空自动编号 hzk001、hzk002…</span>
+      </div>
+      <div class="row2">
+        <label>或选择 .txt 文件 <input type="file" id="hzkImportFile" accept=".txt,.md"></label>
+        <label><input type="checkbox" id="hzkImportShuffle"> 导入后打乱字符顺序</label>
+      </div>
+      <div class="scope-opts" id="hzkVisOpts">
+        <label class="scope-opt on"><input type="radio" name="hzkVis" value="public" checked>
+          <span><b>所有人可见</b><i>所有登录用户在「字库」里都能看到并练习</i></span></label>
+        <label class="scope-opt"><input type="radio" name="hzkVis" value="scope">
+          <span><b>按部门 / 角色可见</b><i>只对指定部门或角色的人开放</i></span></label>
+        <label class="scope-opt"><input type="radio" name="hzkVis" value="private">
+          <span><b>仅自己可见</b><i>普通用户看不到；管理员始终能看到</i></span></label>
+      </div>
+      <div class="muted" style="font-size:12px;margin-top:6px">
+        导入后默认 <b>所有人可见 · 所有人可修改</b>（可见范围之后可改）。
+      </div>
+      <div id="hzkImportMsg" class="muted" style="min-height:16px;margin-top:6px"></div>
+      <div class="scope-foot">
+        <button class="btn btn-ghost" id="hzkImportCancel" type="button">取消</button>
+        <button class="btn btn-primary" id="hzkImportSave" type="button">保存字库</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 字库可见范围弹层（管理员 / 上传者） -->
+<div class="modal hide" id="hzkScopeModal">
+  <div class="modal-mask" id="hzkScopeMask"></div>
+  <div class="modal-box">
+    <div class="modal-head"><span>可见范围 · <b id="hzkScopeName">—</b></span><button class="modal-x" id="hzkScopeClose" type="button">✕</button></div>
+    <div class="modal-body">
+      <div class="scope-opts" id="hzkScopeOpts">
+        <label class="scope-opt"><input type="radio" name="hzkScopeVis" value="public">
+          <span><b>所有人可见</b><i>所有登录用户在「字库」里都能看到并练习</i></span></label>
+        <label class="scope-opt"><input type="radio" name="hzkScopeVis" value="scope">
+          <span><b>按部门 / 角色可见</b><i>只对指定部门或角色的人开放</i></span></label>
+        <label class="scope-opt"><input type="radio" name="hzkScopeVis" value="private">
+          <span><b>仅自己可见</b><i>普通用户看不到；管理员始终能看到</i></span></label>
+      </div>
+      <div id="hzkScopeDetail" class="hide">
+        <div class="scope-grp">
+          <div class="scope-lbl">部门</div>
+          <div class="chips" id="hzkDeptChips"></div>
+          <input class="field" id="hzkDeptInput" placeholder="输入部门名称后回车添加，如：信贷部">
+        </div>
+        <div class="scope-grp">
+          <div class="scope-lbl">角色</div>
+          <div class="chips" id="hzkRoleChips"></div>
+          <input class="field" id="hzkRoleInput" placeholder="输入角色名称后回车添加，如：客户经理">
+        </div>
+      </div>
+      <div class="muted scope-hint" id="hzkScopeHint"></div>
+      <div id="hzkScopeMsg" class="muted" style="min-height:16px;margin-top:6px"></div>
+      <div class="scope-foot">
+        <button class="btn btn-ghost" id="hzkScopeCancel" type="button">取消</button>
+        <button class="btn btn-primary" id="hzkScopeSave" type="button">保存</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 打字练习结果弹层 -->
+<div class="modal hide" id="tpResModal">
+  <div class="modal-mask"></div>
+  <div class="modal-box">
+    <div class="modal-head"><span id="tpResTitle">练习完成 🎉</span></div>
+    <div class="modal-body">
+      <div class="stat-grid">
+        <div class="stat"><div class="n" id="tpResTime">-</div><div class="l">总用时</div></div>
+        <div class="stat"><div class="n" id="tpResSpeed">-</div><div class="l">速度（字/分）</div></div>
+        <div class="stat"><div class="n" id="tpResAcc">-</div><div class="l">正确率</div></div>
+        <div class="stat"><div class="n" id="tpResChars">-</div><div class="l">已打字数</div></div>
+      </div>
+      <div id="tpErrBox" class="hide">
+        <h3 style="font-size:14px;color:var(--sub);margin:12px 0 6px">错误字统计</h3>
+        <div id="tpErrList" class="tp-errlist"></div>
+      </div>
+      <div id="tpResMsg" class="muted" style="min-height:16px"></div>
+      <div class="scope-foot">
+        <button class="btn btn-ghost" id="tpResAgain" type="button">再打一遍</button>
+        <button class="btn btn-primary" id="tpResClose" type="button">关闭</button>
       </div>
     </div>
   </div>

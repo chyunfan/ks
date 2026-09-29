@@ -4,17 +4,18 @@ import { setToken, getToken } from './supabase.js';
 // 构建标识：页面会显示出来，用于确认「浏览器跑的是不是最新版」
 // （改代码后务必同步更新这里，便于一眼看出缓存问题）
 // ============================================================
-export const BUILD_TAG = 'v2.24 · 2026-09-28';
+export const BUILD_TAG = 'v2.26 · 2026-09-29';
 
 // ============================================================
 // 后端接口地址（候选列表，自动回退）
 // ------------------------------------------------------------
 // 本应用有三种访问形态：
-//   A. 被网关 rewrites 代理到子路径：https://www.chyunfan.cn/ks
+//   A. 被网关 rewrites 代理到子路径：https://www.chyunfan.cn/ks（现在就用这条）
 //      → 接口必须是 /ks/api/xxx（网关按前缀转发到 Vercel）
-//   B. 被网关代理到另一个子路径：https://www.chyunfan.cn/credit-exam-cloud
-//   C. 直接访问 Vercel：https://credit-exam-cloud.vercel.app
+//   B. 直接访问 Vercel：https://credit-exam-cloud.vercel.app
 //      → /api/xxx 可用；带前缀的 /xxx/api/xxx 由项目内 rewrite 兜住，也可用
+//   C. 老路径 https://www.chyunfan.cn/credit-exam-cloud
+//      → 网关那条规则指向的部署已暂停（503），v2.25 起不再把它当作兜底前缀
 //
 // 历史上踩过的两个坑（同一个根因：**构建期写死的前缀 ≠ 实际访问路径**）：
 //   1) base 配成 './' 时，页面在无尾斜杠的 /credit-exam-cloud 下会把 ./api/login

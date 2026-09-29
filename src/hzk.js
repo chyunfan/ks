@@ -6,12 +6,14 @@ import { getTypingPrefs } from './typing.js';
 // ============================================================
 // 字库管理（打字练习的题库）+ 练习记录
 // ------------------------------------------------------------
-// 权限口径（本次需求，与题库那套**故意不同**）：
-//   可见：人人可上传；上传后**默认所有人可见**（visibility='public'）
-//   可改：管理员上传的 / 个人上传的，**都允许所有人修改**（改名 / 重排 / 换文字）
-//          —— editable='all' 时成立；改成 'owner' 收窄是上传者/管理员的自由
+// 权限口径（当前需求）：
+//   打字：**所有人**（只要能看到这个字库，就能进去打）
+//   重排：管理员 / 上传者本人 / 字库被设为 editable='all' 时的所有人
+//         —— 重排只是打乱字序，不动字数与用字，属于「练习玩法」而非「改内容」
+//   改名：**仅管理员或上传者本人**（本次收窄：别人上传的库不许改名字）
 //   可见范围：仅管理员或上传者本人可改（数据库侧另有触发器锁住）
-//   删除：仅上传者本人或管理员（删别人的库不在「可修改」范围内）
+//   删除：仅上传者本人或管理员
+// 一句话：非自己上传的字库，普通用户「只能打字、重排」。
 // 上传者身份用 source 徽章标出：admin 管理员上传 / user 个人上传。
 // ============================================================
 
@@ -58,12 +60,14 @@ function shuffleText(text) {
 
 /* ---------- 权限口径（唯一入口） ---------- */
 function mineOf(h) { return !!h && h.userId === getUserId(); }
-/** 可修改内容（改名 / 重排）：所有人可改（editable='all'），或本人 / 管理员 */
+/** 重排：所有人可重排（editable='all'），或本人 / 管理员 */
 export function canEditHz(h) {
   if (!h) return false;
   if (isAdmin() || mineOf(h)) return true;
   return (h.editable || 'all') === 'all';
 }
+/** 改名：**仅管理员或上传者本人**（别人上传的库只能打字、重排） */
+export function canRenameHz(h) { return !!h && (isAdmin() || mineOf(h)); }
 /** 删除：本人或管理员 */
 export function canDeleteHz(h) { return !!h && (isAdmin() || mineOf(h)); }
 /** 可见范围：管理员或上传者本人 */
@@ -110,18 +114,18 @@ function visTag(h) {
   return '<span class="vis-tag vis-public">所有人可见</span>';
 }
 function editTag(h) {
+  // 这个标签说的是「别人能不能动这份字库」：重排属于可放开的，改名/可见范围/删除不放。
   return (h.editable || 'all') === 'all'
-    ? '<span class="vis-tag vis-edit">所有人可修改</span>'
+    ? '<span class="vis-tag vis-edit">所有人可重排</span>'
     : '<span class="vis-tag vis-scope">仅上传者可改</span>';
 }
 
 function hzkRowHtml(h) {
   const acts = [];
   acts.push('<button class="btn btn-primary btn-sm act-type" type="button">打字</button>');
-  if (canEditHz(h)) {
-    acts.push('<button class="btn btn-ghost btn-sm act-shuffle" type="button">重排</button>');
-    acts.push('<button class="btn btn-ghost btn-sm act-rename" type="button">改名</button>');
-  }
+  if (canEditHz(h)) acts.push('<button class="btn btn-ghost btn-sm act-shuffle" type="button">重排</button>');
+  // 改名只给管理员和上传者本人：别人上传的库，普通用户「只能打字、重排」
+  if (canRenameHz(h)) acts.push('<button class="btn btn-ghost btn-sm act-rename" type="button">改名</button>');
   if (canScopeHz(h)) acts.push('<button class="btn btn-ghost btn-sm act-scope" type="button">可见范围</button>');
   if (canDeleteHz(h)) acts.push('<button class="btn btn-ghost btn-sm act-del" type="button">删除</button>');
 
@@ -156,8 +160,8 @@ export async function renderHzk() {
   const persons = hzkRows.filter(h => h.source !== 'admin');
   let html = '';
   if (note) html += '<div class="feedback ok show">' + esc(note) + '</div>';
-  if (admins.length) html += '<div class="list-head">管理员上传（' + admins.length + '）· 所有人可见、可修改</div>' + admins.map(hzkRowHtml).join('');
-  if (persons.length) html += '<div class="list-head">个人上传（' + persons.length + '）· 所有人可见、可修改</div>' + persons.map(hzkRowHtml).join('');
+  if (admins.length) html += '<div class="list-head">管理员上传（' + admins.length + '）· 所有人可见 · 可打字/重排</div>' + admins.map(hzkRowHtml).join('');
+  if (persons.length) html += '<div class="list-head">个人上传（' + persons.length + '）· 所有人可见 · 可打字/重排</div>' + persons.map(hzkRowHtml).join('');
   box.innerHTML = html;
 
   box.querySelectorAll('.bank-row').forEach(row => {
@@ -219,7 +223,10 @@ async function shuffleHz(h) {
 }
 
 async function renameHz(h) {
-  if (!canEditHz(h)) { alert('该字库被设为「仅上传者可改」，你没有修改权限。'); return; }
+  if (!canRenameHz(h)) {
+    alert('无权限：改名只有管理员或上传者本人可以操作。\n\n别人上传的字库，你可以「打字」和「重排」。');
+    return;
+  }
   const name = prompt('修改字库名称', h.name);
   if (!name || !name.trim() || name.trim() === h.name) return;
   const { error } = await supabase.from('exam_hzk').update({ name: name.trim() }).eq('id', h.id);
@@ -303,7 +310,7 @@ async function saveImport() {
     }
     if (ins && ins.error) throw new Error(ins.error.message);
     $('hzkImportModal').classList.add('hide');
-    setNote('已导入字库「' + name + '」（' + countChars(text) + ' 字）· 所有人可见、可修改。');
+    setNote('已导入字库「' + name + '」（' + countChars(text) + ' 字）· 所有人可见 · 可打字/重排。');
     await renderHzk();
   } catch (e) {
     importMsg('保存失败：' + e.message, true);
@@ -561,9 +568,11 @@ export function initHzk(cb) {
 // 验收脚本用的调试出口（vite build 时整块剔除）
 if (import.meta.env.DEV) {
   window.__hzk = {
-    renderHzk, renderRecords, canEditHz, canDeleteHz, canScopeHz,
+    renderHzk, renderRecords, canEditHz, canRenameHz, canDeleteHz, canScopeHz,
     list: async () => (await listHzk()),
     find: async id => (await listHzk()).find(x => x.id === id),
+    // 内部入口直调：验收要绕开按钮，验证「第二道闸」本身拦不拦得住
+    rename: renameHz, shuffle: shuffleHz, del: deleteHz,
     shuffleText,
     nextHzkName
   };

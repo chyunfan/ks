@@ -12,7 +12,7 @@
 
 ## 目录结构
 ```
-index.html              # 入口（登录 / 题库管理 / 练习 / 结果 四个屏）
+index.html              # 入口（登录 / 题库管理 / 打字练习 / 练习 / 结果 四个屏）
 src/
   main.js               # 应用启动与屏幕路由
   auth.js               # 自定义账号登录/注册（调用 /api/*）
@@ -21,14 +21,20 @@ src/
   banks.js              # 题库管理：列表/导入/重命名/导出/删除
   import.js             # xlsx 解析 + 逐行校验 + 模板/导出生成
   engine.js             # 练习引擎（顺序/考试/错题/收藏 + 答题卡/续做）
+  hzk.js                # 字库管理（打字练习的题库）+ 练习记录
+  typing.js             # 打字练习引擎（跟打/对齐/退格/编码提示/限时/结算）
+  wubi.js               # 五笔86 单字码表（scripts/gen_wubi.py 生成，勿手改）
   styles.css
 api/
   register.js           # 注册（bcrypt 存 hash）
   login.js              # 登录（验密 + 签发 HS256 JWT，payload.sub=exam_accounts.id）
 supabase/
   schema.sql            # 建表 + RLS（在 Supabase SQL Editor 执行一次）
+  typing.sql            # 打字练习：字库 + 练习记录 两张表与 RLS
 scripts/
   inline.mjs            # 构建后把 CSS/JS 内联进 index.html → 输出单文件产物
+  check_typing.mjs      # 打字练习端到端验收（89 项）
+  gen_wubi.py           # 由 wubi86.dict.yaml 生成 src/wubi.js
 ```
 
 ## 一、Supabase 初始化（一次性）
@@ -70,6 +76,32 @@ npm run build:multi  # 仅 vite build（多文件：index.html + assets/）
 > 这两个函数**不会**一起上线，登录/注册会 404。此种场景需把 `api/` 两个函数
 > 另行部署（Vercel/云函数），或改用完整的 Vercel 仓库部署。
 
+### 关于「部署在哪个子路径」（踩过两次的坑）
+
+本项目线上地址是 **https://www.chyunfan.cn/ks**（GitHub 仓库名 `ks`）。
+它在 `chyunfan.cn` 上不是直接部署，而是被「网关项目的 rewrites」代理到子路径，
+浏览器地址栏路径不变。由此出过两次线上事故，根因都是**构建期写死的路径 ≠ 实际访问路径**：
+
+| 症状 | 原因 |
+|---|---|
+| 页面没有任何样式，登录卡和应用主体堆在一起 | 多文件产物里 `index.html` 引用 `/credit-exam-cloud/assets/*.css`，但这次是从 `/ks` 访问 → 浏览器去 `/credit-exam-cloud/…` 取 CSS → 命中另一个**已暂停**的部署 → 503 → `.hide{display:none}` 失效 |
+| 登录/注册失败（拿到 503 的 HTML，不是 JSON） | 接口前缀同样写死成 `/credit-exam-cloud`，`/credit-exam-cloud/api/login` → 503 |
+
+现在的两道保险，让应用**放在任意子路径都能跑**：
+
+1. **产物零外链**：构建固定走 `npm run build`（`vercel.json` 的 `buildCommand` 就是这个），
+   产出的是自包含单文件，浏览器一个资源请求都不发，资源路径与部署路径彻底解耦。
+   `scripts/inline.mjs` 里有断言：万一下次只跑了 `vite build`，**构建会直接失败**，不会把裸页面发上线。
+2. **接口前缀跟着页面走**：`src/auth.js` 的 `apiCandidates()` 优先用 `location.pathname`
+   推导前缀（`/ks` → `/ks/api/xxx`），站点根 `/api/xxx` 与构建期前缀依次兜底。
+
+> 换部署路径时**不需要改代码**；只想改构建期兜底前缀就动 `vite.config.js` 里的 `APP_BASE`
+> （v2.25 起为 `/ks/`，与线上路径一致）。
+
+> ⚠️ 网关（chyunfan.cn 那个项目）里 `/credit-exam-cloud` 这条规则指向的部署已**暂停**
+> （访问返回 `503 DEPLOYMENT_PAUSED`）。老地址已弃用，建议把该规则清理掉；
+> 同时 `/ks` 规则要指向本仓库对应的 Vercel 项目。
+
 ## 四、题库模板（.xlsx，10 列）
 | 题型 | 案例材料 | 题干 | A | B | C | D | E | F | 答案 | 解析 |
 |---|---|---|---|---|---|---|---|---|---|---|
@@ -87,9 +119,24 @@ npm run build:multi  # 仅 vite build（多文件：index.html + assets/）
 - 自定义账号（账号≥5 位、密码≥6 位，均支持中文），不依赖 Supabase Auth。
 - 内置「默认题库」为只读本地题库（视前端需要接入），云端题库由用户自行导入。
 
+## 打字练习（共用同一套账号）
+顶栏第二个入口。字库 = 打字练习的题库，与题库同库同账号，跨设备同步。
+
+| | 可见 | 可修改 | 删除 | 可见范围 |
+|---|---|---|---|---|
+| 管理员上传 | 所有人（默认） | **所有人** | 本人 / 管理员 | 管理员 / 本人 |
+| 个人上传 | 所有人（默认） | **所有人** | 本人 / 管理员 | 管理员 / 本人 |
+
+- 「可修改」= 改名 / 重排 / 换文字。可见范围另有触发器锁，非管理员且非上传者改不动。
+- `exam_hzk.source` 记的是**上传时的身份**（admin / user），列表用它出徽章；
+  写入由 `trg_exam_hzk_owner` 按服务端身份判定，前端伪造不了。
+- 练习记录 `exam_typing_records`：本人可读写；**管理员可查看所有人的记录**（`exam_is_admin()`）。
+- 先跑 `supabase/typing.sql`，否则字库页会提示「加载字库失败」。
+
 ## 常见问题
 | 现象 | 原因 | 处理 |
 |---|---|---|
-| 页面无样式、所有界面堆在一起 | CSS/JS 404（`.hide` 失效） | 用 `npm run build` 出单文件；或确认 `assets/` 一起部署 |
+| 页面无样式、所有界面堆在一起 | CSS/JS 404（`.hide` 失效）。**换过访问路径时最容易中招**：产物引用的是构建期前缀，不是当前路径 | 用 `npm run build` 出零外链单文件（构建命令已在 `vercel.json` 里固定）；见上文「关于部署在哪个子路径」 |
+| 登录报「接口未就绪（HTTP 503）」，返回内容是 HTML | 接口前缀与当前访问路径对不上 | `src/auth.js` 已按 `location.pathname` 自动推导，重新部署即可；确认 `api/` 函数在该域名下可访问 |
 | 登录成功但题库列表空白 | `SUPABASE_JWT_SECRET` 不匹配 | 与后台 JWT Secret 核对一致 |
 | 登录/注册报 404 | 未部署 `api/` 函数 | 走完整 Vercel 部署（含 `api/`） |

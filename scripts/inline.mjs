@@ -17,7 +17,7 @@ let html = fs.readFileSync(indexPath, 'utf8');
 // 兼容三种写法：
 //   './assets/x.js'                     （base: './'）
 //   '/assets/x.js'                      （base: '/'）
-//   '/credit-exam-cloud/assets/x.js'    （base: '/credit-exam-cloud/'，本项目的实际配置）
+//   '/ks/assets/x.js'                   （base: '/ks/'，本项目的实际配置）
 function toLocal(href) {
   const clean = String(href).replace(/^\.?\//, '');
   const direct = path.join(dist, clean);

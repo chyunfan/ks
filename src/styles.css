@@ -10,6 +10,20 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Micr
   background:var(--bg);color:var(--ink);line-height:1.6;-webkit-font-smoothing:antialiased;
   -webkit-text-size-adjust:100%;touch-action:manipulation}
 .wrap{max-width:820px;margin:0 auto;padding:18px 16px 60px}
+/* ---- 启动遮罩 ----
+   已登录时 boot() 要先把题库拉回来才知道进哪一屏，这段原本是纯白。
+   延迟 150ms 才淡入：加载快（<150ms）时它根本不会出现，不会闪一下。 */
+.boot-mask{position:fixed;inset:0;z-index:9999;background:var(--bg);
+  display:flex;align-items:center;justify-content:center;
+  opacity:0;transition:opacity .18s ease;animation:bootIn .18s ease .15s forwards}
+.boot-mask.off{animation:none;opacity:0;pointer-events:none}
+.boot-box{display:flex;flex-direction:column;align-items:center;gap:12px}
+.boot-spin{width:26px;height:26px;border-radius:50%;
+  border:3px solid var(--brand-soft);border-top-color:var(--brand);
+  animation:bootSpin .8s linear infinite}
+.boot-text{font-size:13px;color:var(--sub)}
+@keyframes bootIn{to{opacity:1}}
+@keyframes bootSpin{to{transform:rotate(360deg)}}
 header.top{display:flex;align-items:center;gap:10px;margin-bottom:18px}
 header.top .logo{width:40px;height:40px;border-radius:11px;background:linear-gradient(135deg,#2f6bff,#5b8cff);
   display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:18px;box-shadow:var(--shadow)}
@@ -471,6 +485,104 @@ input[type=number]{width:90px;padding:8px 10px;border:1.5px solid var(--line);bo
 .u-f .field{width:120px;padding:8px 10px;font-size:13.5px;margin-bottom:0}
 .u-adm{display:flex;align-items:center;gap:5px;font-size:12.5px;color:var(--sub);white-space:nowrap}
 
+/* 重置密码：行下方展开的临时密码条 */
+.u-reset-out{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin:-4px 0 12px;
+  padding:10px 14px;border:1px dashed #e6cf9a;background:#fffbf1;border-radius:12px;font-size:13px}
+.u-reset-label{color:var(--sub)}
+.u-pwd{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:15px;font-weight:700;
+  letter-spacing:.08em;color:#8a5a00;background:#fff;border:1px solid #eadcbf;border-radius:7px;
+  padding:3px 9px;user-select:all;-webkit-user-select:all}
+.u-reset-tip{font-size:12px}
+
+/* 做题情况弹层（管理员） */
+.stats-box{max-width:560px}
+.stats-sum{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px}
+.stat{background:#f5f7fb;border:1px solid var(--line);border-radius:10px;padding:9px 6px;text-align:center}
+.stat b{display:block;font-size:17px;line-height:1.3;font-weight:700}
+.stat b.stat-date{font-size:13px;padding-top:2px}
+.stat span{font-size:11.5px;color:var(--sub)}
+.stats-list{display:flex;flex-direction:column;gap:9px;max-height:52vh;overflow:auto}
+.stat-row{border:1px solid var(--line);border-radius:12px;padding:10px 12px;background:#fff}
+.sr-top{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+.sr-name{font-weight:700;font-size:13.5px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sr-prog{font-size:12.5px;color:var(--sub);white-space:nowrap;flex:0 0 auto}
+.sr-prog b{color:var(--brand);font-size:13.5px}
+.sr-bar{height:6px;background:#eef1f6;border-radius:999px;overflow:hidden;margin:8px 0 6px}
+.sr-bar i{display:block;height:100%;background:var(--brand);border-radius:999px}
+.sr-meta{display:flex;justify-content:space-between;gap:8px;font-size:12px;color:var(--sub)}
+.sr-meta b{font-size:12.5px}
+.rate-good{color:var(--ok)}
+.rate-mid{color:#c47d00}
+.rate-bad{color:var(--bad)}
+.stats-hint{font-size:11.5px;line-height:1.5;margin-top:12px;padding-top:10px;border-top:1px dashed var(--line)}
+
+/* ---- 做题排行（用户选定题库后查看本库做题数排名） ---- */
+.rank-entry{display:flex;align-items:center;gap:11px;width:100%;padding:13px 14px;cursor:pointer;
+  text-align:left;font:inherit;color:inherit;border:1.5px solid var(--line);border-radius:14px;background:#fff}
+.rank-entry:hover{border-color:#c7d4f5;background:#fbfdff}
+.rank-entry .rk-ic{font-size:20px;line-height:1}
+.rank-entry .rk-body{flex:1;min-width:0;display:flex;flex-direction:column}
+.rank-entry .rk-t{font-weight:700;font-size:15px}
+.rank-entry .rk-d{font-size:12.5px;color:var(--sub);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rank-entry .rk-go{font-size:13px;font-weight:600;color:var(--brand);white-space:nowrap}
+
+.rank-box{max-width:460px}
+.rank-sum{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px}
+.rank-sum .rs{border:1px solid var(--line);border-radius:12px;padding:9px 8px;text-align:center}
+.rank-sum .rs b{display:block;font-size:15px;font-weight:800}
+.rank-sum .rs span{font-size:11.5px;color:var(--sub)}
+.rank-list{display:flex;flex-direction:column;gap:7px}
+.rank-msg{padding:22px 0;text-align:center;font-size:13px}
+.rank-row{display:flex;align-items:center;gap:10px;padding:9px 10px;border:1px solid var(--line);border-radius:12px}
+.rank-row.me{border-color:#bdd3ff;background:var(--brand-soft)}
+.rank-no{width:28px;text-align:center;font-size:14px;font-weight:800;color:var(--sub);flex:0 0 auto}
+.rank-no.r1,.rank-no.r2,.rank-no.r3{font-size:17px}
+.rank-mid{flex:1;min-width:0}
+.rank-name{font-size:13.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rank-tag{margin-left:6px;font-size:10.5px;font-weight:700;color:#fff;background:var(--brand);
+  border-radius:999px;padding:1px 6px;vertical-align:1px}
+.rank-bar{height:5px;border-radius:3px;background:var(--chip);margin-top:5px;overflow:hidden}
+.rank-bar i{display:block;height:100%;background:linear-gradient(90deg,#2f6bff,#5b8cff);border-radius:3px}
+.rank-val{text-align:right;font-size:12px;color:var(--sub);white-space:nowrap;flex:0 0 auto}
+.rank-val b{font-size:14.5px;color:var(--ink)}
+.rank-val .rank-total{font-size:11.5px}
+.rank-val .rank-rate{display:block;font-size:11.5px;font-weight:700;margin-top:1px}
+.rank-sep{text-align:center;color:var(--sub);font-size:12px;line-height:1;margin:1px 0}
+.rank-hint{font-size:11.5px;line-height:1.5;margin-top:12px;padding-top:10px;border-top:1px dashed var(--line)}
+
+/* 我的报告（个人练习正确率 + 模拟考试历次成绩） */
+.rp-sec{font-size:12.5px;font-weight:700;color:var(--sub);margin:2px 0 8px}
+.rp-sec + .rank-sum{margin-bottom:10px}
+.rp-bar{height:7px;border-radius:5px;background:var(--line);overflow:hidden;margin-bottom:6px}
+.rp-bar i{display:block;height:100%;background:var(--brand);border-radius:5px;transition:width .25s ease}
+.rp-bar-txt{font-size:12px;color:var(--sub);margin-bottom:16px}
+.rp-bar-txt b{color:var(--brand);font-weight:800}
+.rp-exam-list{display:flex;flex-direction:column;gap:7px}
+.rp-msg{padding:18px 10px;text-align:center;font-size:12.5px;line-height:1.7}
+.rp-exam{display:flex;align-items:center;gap:10px;padding:9px 10px;
+  border:1px solid var(--line);border-radius:12px}
+.rp-exam-when{flex:0 0 100px;font-size:12px;color:var(--sub);
+  display:flex;align-items:center;gap:5px}
+.rp-auto{font-size:10px;line-height:1.4;padding:1px 4px;border-radius:5px;
+  background:#fff4e5;color:#a8611a;white-space:nowrap}
+.rp-exam-score{flex:0 0 88px;font-size:15px;font-weight:800}
+.rp-full{font-size:11.5px;font-weight:400;color:var(--sub)}
+.rp-exam-meta{flex:1;text-align:right;font-size:11.5px;color:var(--sub)}
+
+/* 管理员 · 做题情况里的逐场考试明细 + 分题库统计 */
+.sr-exams{display:flex;flex-wrap:wrap;align-items:center;gap:5px 8px;
+  margin-top:8px;padding-top:8px;border-top:1px dashed var(--line);font-size:11.5px;color:var(--sub)}
+.sr-exams-h{font-weight:600;color:var(--sub)}
+.sr-exams-h b{font-weight:800}
+.sr-exam{padding:1px 6px;border-radius:6px;background:#f4f6fa;white-space:nowrap}
+.sr-exam b{font-weight:800}
+.sr-auto{font-style:normal;font-size:9.5px;margin-left:4px;padding:0 3px;border-radius:4px;
+  background:#fff4e5;color:#a8611a}
+.sr-more{font-size:11px}
+.bstats-pick{margin-bottom:12px}
+.bstats-pick select{width:100%}
+.bstats-msg{padding:20px 0;text-align:center;font-size:13px}
+
 .scope-opts{display:flex;flex-direction:column;gap:8px;margin-bottom:12px}
 .scope-opt{display:flex;gap:9px;align-items:flex-start;border:1.5px solid var(--line);border-radius:12px;padding:10px 12px;cursor:pointer}
 .scope-opt.on{border-color:var(--brand);background:#f5f9ff}
@@ -500,7 +612,22 @@ input[type=number]{width:90px;padding:8px 10px;border:1.5px solid var(--line);bo
   .u-f .field{width:100%}
   .u-adm{flex:0 0 auto}
   .u-save{width:100%}
+  .u-stats,.u-reset{flex:1 1 46%}
+  .u-reset-out{gap:7px;padding:10px 12px}
+  .u-pwd{font-size:14px}
+  .u-reset-tip{flex:1 1 100%}
+  .stats-sum{grid-template-columns:repeat(2,1fr)}
   .modal-box{width:94%}
+  /* 排行：手机上「已做 / 总数」和正确率挤在一行会换行错位，缩一下字号 */
+  .rank-sum .rs b{font-size:14px}
+  .rank-val b{font-size:13.5px}
+  .rank-row{padding:8px 9px;gap:8px}
+  .rank-no{width:24px}
+  /* 我的报告：窄屏把「对 x/y 题 · 用时」折到第二行，避免三列挤压溢出 */
+  .rp-exam{flex-wrap:wrap;gap:4px 8px;padding:9px 9px}
+  .rp-exam-when{flex:0 0 auto}
+  .rp-exam-score{flex:1;text-align:right;font-size:14px}
+  .rp-exam-meta{flex:1 1 100%;text-align:left;font-size:11px}
 }
 
 /* ============================================================

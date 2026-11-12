@@ -7,7 +7,7 @@
  *
  * 覆盖点：
  *  A. 非管理员（普通用户）视角
- *    A1 他人上传的题库：操作区**只有「练习」**，没有重命名 / 导出 / 删除 / 可见范围
+ *    A1 他人上传的题库：操作区**只有「练习」**，没有编辑题目 / 重命名 / 导出 / 删除 / 可见范围
  *    A2 列表头提示「其他人上传的（N）· 只能练习」
  *    A3 自己上传的题库：练习 / 重命名 / 导出 / 删除，但**没有**「可见范围」
  *    A4 没有「用户管理」入口
@@ -15,7 +15,7 @@
  *    A6 纵深防御：往他人题库行里手工塞一个「删除」按钮再点，不会发出删除请求
  *    A7 window.__banks.canManage()：他人库 false、自己的库 true
  *  B. 管理员视角
- *    B1 他人上传的题库：练习 / 重命名 / 导出 / 可见范围 / 删除 全都有
+ *    B1 他人上传的题库：练习 / 编辑题目 / 重命名 / 导出 / 可见范围 / 删除 全都有
  *    B2 自己的题库：同样全部拥有（含可见范围）
  *    B3 有「用户管理」入口，且能打开他人题库的可见范围弹窗
  *    B4 canManage()：他人库 true
@@ -47,7 +47,7 @@ const EXE = 'C:/Users/cyf/AppData/Local/ms-playwright/chromium-1140/chrome-win/c
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const PORT = 5205;
-const URL_APP = `http://localhost:${PORT}/credit-exam-cloud/`;
+const URL_APP = `http://localhost:${PORT}/ks/`;
 const SHOTS = path.join(ROOT, 'shots');
 fs.mkdirSync(SHOTS, { recursive: true });
 
@@ -196,10 +196,10 @@ chk(rs.length === 3, 'A 列表列出 3 个可见题库', String(rs.length));
 
 chk(other && other.acts.join() === '练习', 'A1 他人上传的题库：操作区只有「练习」', other && other.acts.join());
 chk(shared && shared.acts.join() === '练习', 'A1 范围共享的题库：同样只有「练习」', shared && shared.acts.join());
-chk(other && !other.acts.some(a => /重命名|删除|导出|可见范围/.test(a)),
-  'A1 他人题库没有重命名 / 删除 / 导出 / 可见范围', other && other.acts.join());
-chk(mine && mine.acts.join() === '练习,重命名,导出,删除',
-  'A3 自己的题库：练习/重命名/导出/删除，且无「可见范围」', mine && mine.acts.join());
+chk(other && !other.acts.some(a => /重命名|删除|导出|可见范围|编辑题目/.test(a)),
+  'A1 他人题库没有编辑题目 / 重命名 / 删除 / 导出 / 可见范围', other && other.acts.join());
+chk(mine && mine.acts.join() === '练习,编辑题目,重命名,导出,删除',
+  'A3 自己的题库：练习/编辑题目/重命名/导出/删除，且无「可见范围」', mine && mine.acts.join());
 
 const hs = await heads();
 chk(hs.join('|').includes('他人') && hs.join('|').includes('只能练习'),
@@ -253,9 +253,9 @@ await reload();
 
 chk(await visible('#toAdmin'), 'B3 出现「用户管理」入口');
 rs = await rows();
-chk(rs.find(r => r.id === 'b-other').acts.join() === '练习,重命名,导出,可见范围,删除',
-  'B1 他人题库：练习/重命名/导出/可见范围/删除 全都有', rs.find(r => r.id === 'b-other').acts.join());
-chk(rs.find(r => r.id === 'b-mine').acts.join() === '练习,重命名,导出,可见范围,删除',
+chk(rs.find(r => r.id === 'b-other').acts.join() === '练习,编辑题目,重命名,导出,可见范围,删除',
+  'B1 他人题库：练习/编辑题目/重命名/导出/可见范围/删除 全都有', rs.find(r => r.id === 'b-other').acts.join());
+chk(rs.find(r => r.id === 'b-mine').acts.join() === '练习,编辑题目,重命名,导出,可见范围,删除',
   'B2 自己的题库：同样全部拥有', rs.find(r => r.id === 'b-mine').acts.join());
 chk((await page.evaluate(() => window.__banks.canManage({ mine: false, name: 'x' }))) === true,
   'B4 canManage(他人库) = true（管理员可管）');
@@ -291,10 +291,10 @@ chk(/set local role authenticated/.test(L) && /request\.jwt\.claims/.test(L),
 console.log('\n【D. 源码守卫】');
 const bk = fs.readFileSync(path.join(ROOT, 'src/banks.js'), 'utf8');
 chk(/function canManage\(b\)/.test(bk), 'D 存在统一权限口径 canManage()');
-chk((bk.match(/if \(!canManage\(b\)\) \{ denyManage\(b\); return; \}/g) || []).length === 3,
-  'D 重命名 / 导出 / 删除 三个操作都有二次校验',
+chk((bk.match(/if \(!canManage\(b\)\) \{ denyManage\(b\); return; \}/g) || []).length === 4,
+  'D 编辑题目 / 重命名 / 导出 / 删除 四个操作都有二次校验',
   String((bk.match(/if \(!canManage\(b\)\) \{ denyManage\(b\); return; \}/g) || []).length));
-chk((bk.match(/if \(own\) acts\.push/g) || []).length === 3
+chk((bk.match(/if \(own\) acts\.push/g) || []).length === 4
   && /if \(adm\) acts\.push\('<button class="btn btn-ghost btn-sm act-scope"/.test(bk),
   'D 按钮渲染：他人题库对非管理员只出「练习」');
 chk(/if \(!isAdmin\(\)\) \{ alert\('无权限：「可见范围」只有管理员可以调整。'\); return; \}/.test(bk)

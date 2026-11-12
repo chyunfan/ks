@@ -15,6 +15,7 @@
  *        （engine 里「去除正确的判断题」靠 answerText 判断，少一个字段就会失灵）。
  */
 import { supabase } from './supabase.js';
+import { dropQuestions } from './bankcache.js';
 
 const LT = 'ABCDEF';                       // 选项字母上限，与导入模板一致
 const $ = id => document.getElementById(id);
@@ -490,6 +491,7 @@ async function save() {
   try {
     const { error } = await supabase.from('exam_banks').update({ questions: out }).eq('id', st.bank.id);
     if (error) throw new Error(error.message);
+    dropQuestions(st.bank.id);        // 题目变了，缓存必须作废，否则退出后进练习还是旧题
     st.raw = deep(out);
     st.orig = out.map(normRead);
     st.draft = deep(st.orig);

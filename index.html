@@ -7,6 +7,16 @@
   <link rel="stylesheet" href="/src/styles.css">
 </head>
 <body>
+<!-- ============ 启动遮罩 ============
+     登录状态已保存时，boot() 要先把题库拉回来才知道进哪一屏，这段是白屏的。
+     题库大一点就是一两秒的纯白，用户会以为卡住了。
+     延迟 150ms 才淡入：加载快的时候完全不出现，不会闪一下。 -->
+<div id="bootMask" class="boot-mask">
+  <div class="boot-box">
+    <div class="boot-spin"></div>
+    <div id="bootText" class="boot-text">正在加载…</div>
+  </div>
+</div>
 <div class="wrap">
 
   <!-- ============ 登录 / 注册 ============ -->
@@ -175,11 +185,15 @@
           <h2>用户管理 <span class="muted" style="font-size:12px;font-weight:400">管理员专用</span></h2>
           <div class="muted" style="margin-bottom:10px">
             在这里给账号设定「部门 / 角色」，并指定谁是管理员。
-            题库的可见范围可按部门或角色限制；设好后到「管理题库」里对某个题库点「可见范围」。
+            题库的可见范围可按部门或角色限制；设好后到「管理题库」里对某个题库点「可见范围」。<br>
+            有人忘记密码时，点该账号的「重置密码」——系统会生成 8 位临时密码，
+            <b>只显示这一次</b>，请当场转告本人。<br>
+            点「做题情况」可以看该账号在每个题库的已做量（如 32 / 100）与正确率。
           </div>
           <div class="admin-bar">
             <input id="userSearch" class="field" placeholder="搜索账号 / 部门 / 角色">
             <button id="userReload" class="btn btn-ghost btn-sm" type="button">刷新</button>
+            <button id="bankStatsBtn" class="btn btn-ghost btn-sm" type="button">分题库统计</button>
             <span id="adminMsg" class="muted"></span>
           </div>
         </div>
@@ -229,6 +243,30 @@
               <span class="lib-ic">⭐</span><span class="lib-t">收藏回顾</span><span class="lib-n" id="favCnt">0</span>
             </button>
           </div>
+        </div>
+
+        <div class="section">
+          <h2>我的报告</h2>
+          <button type="button" class="rank-entry" id="reportEntry">
+            <span class="rk-ic">📊</span>
+            <span class="rk-body">
+              <span class="rk-t">查看练习正确率与考试成绩</span>
+              <span class="rk-d" id="reportHint">做完题后可以在这里看正确率</span>
+            </span>
+            <span class="rk-go">查看 ›</span>
+          </button>
+        </div>
+
+        <div class="section">
+          <h2>做题排行</h2>
+          <button type="button" class="rank-entry" id="rankEntry">
+            <span class="rk-ic">🏆</span>
+            <span class="rk-body">
+              <span class="rk-t">查看本库做题数排名</span>
+              <span class="rk-d" id="rankHint">看看这个题库里各自做了多少题</span>
+            </span>
+            <span class="rk-go">查看 ›</span>
+          </button>
         </div>
 
         <div class="section">
@@ -460,6 +498,91 @@
       <div class="scope-foot">
         <button class="btn btn-ghost" id="scopeCancel" type="button">取消</button>
         <button class="btn btn-primary" id="scopeSave" type="button">保存</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 做题情况弹层（管理员查看某个账号的练习统计） -->
+<div class="modal hide" id="statsModal">
+  <div class="modal-mask" id="statsMask"></div>
+  <div class="modal-box stats-box">
+    <div class="modal-head">
+      <span>做题情况 · <b id="statsUserName">—</b></span>
+      <button class="modal-x" id="statsClose" type="button">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="stats-sum" id="statsSummary"></div>
+      <div class="stats-list" id="statsList"></div>
+      <div class="muted stats-hint">
+        「已做」按题目去重统计（同一题多轮只算一次，取最近一次作答）；
+        正确率 = 答对题数 ÷ 已做题数，没做的题不计入分母。
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 分题库统计（管理员：某个题库里所有人的练习正确率 + 模拟考试汇总） -->
+<div class="modal hide" id="bstatsModal">
+  <div class="modal-mask" id="bstatsMask"></div>
+  <div class="modal-box stats-box">
+    <div class="modal-head">
+      <span>分题库统计</span>
+      <button class="modal-x" id="bstatsClose" type="button">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="bstats-pick">
+        <select id="bstatsPick" class="field">
+          <option value="">正在加载题库…</option>
+        </select>
+      </div>
+      <div class="rank-sum" id="bstatsSum"></div>
+      <div class="bstats-list" id="bstatsList"></div>
+      <div class="muted stats-hint">
+        「已做」按题目去重（同一题多轮只算一次，取最近一次作答）；正确率 = 答对 ÷ 已做，没做的题不进分母。
+        模拟考试按得分率折算成百分制统计（组卷满分可调）。只列出**练过或考过**这个题库的人。
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 做题排行弹层（用户选定题库后查看本库做题数排名） -->
+<div class="modal hide" id="rankModal">
+  <div class="modal-mask" id="rankMask"></div>
+  <div class="modal-box rank-box">
+    <div class="modal-head">
+      <span>做题排行 · <b id="rankBankName">—</b></span>
+      <button class="modal-x" id="rankClose" type="button">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="rank-sum" id="rankSum"></div>
+      <div class="rank-list" id="rankList"></div>
+      <div class="muted rank-hint" id="rankTip">
+        按「已做题量」排名：同一题练多轮只算一题；题数相同的人并列同名次（正确率高的排在前面）。
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 我的报告（个人视角：练习正确率 + 模拟考试历次成绩，全部读本机数据） -->
+<div class="modal hide" id="reportModal">
+  <div class="modal-mask" id="reportMask"></div>
+  <div class="modal-box rank-box">
+    <div class="modal-head">
+      <span>我的报告 · <b id="reportBankName">—</b></span>
+      <button class="modal-x" id="reportClose" type="button">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="rp-sec">练习正确率</div>
+      <div class="stats-sum" id="reportStats"></div>
+      <div id="reportBarWrap"></div>
+      <div class="rp-sec">模拟考试历次成绩</div>
+      <div class="rank-sum" id="reportExamSum"></div>
+      <div class="rp-exam-list" id="reportExamList"></div>
+      <div class="muted rank-hint hide" id="reportExamTip"></div>
+      <div class="muted rank-hint">
+        口径：已做 = 本库答过的不重复题数（同一题练多轮只算一题，取最近一次作答）；
+        正确率 = 答对 ÷ 已做，没做的题不进分母。练完清进度不会把这些数字清零。
       </div>
     </div>
   </div>

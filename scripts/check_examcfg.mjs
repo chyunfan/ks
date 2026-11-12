@@ -27,7 +27,7 @@ const EXE = 'C:/Users/cyf/AppData/Local/ms-playwright/chromium-1140/chrome-win/c
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const PORT = 5201;
-const URL_APP = `http://localhost:${PORT}/credit-exam-cloud/`;
+const URL_APP = `http://localhost:${PORT}/ks/`;
 
 /* ---------- 1. 起 dev server ---------- */
 const srv = spawn(process.execPath, [path.join(ROOT, 'node_modules/vite/bin/vite.js'), '--port', String(PORT), '--strictPort'], {

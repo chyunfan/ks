@@ -8,7 +8,7 @@
 //      1) 必须显式加参数才会执行，避免顺手一跑又留一个账号
 //      2) 跑完立刻执行 supabase/cleanup-test-accounts.sql 清掉
 //      3) 以后联调把 USER 改成一眼看出是临时的名字，别用固定名反复跑
-const base = 'https://www.chyunfan.cn/credit-exam-cloud';
+const base = 'https://www.chyunfan.cn/ks';
 const USER = 'diag_check_2026';
 const PASS = 'diag123456';
 

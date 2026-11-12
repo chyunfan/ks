@@ -1,13 +1,16 @@
 import {
   LS, loadArr, saveArr, addId, removeId, hasId, countId,
   clearProgress, saveProgress, loadProgress, loadProgressMap,
-  markOf, setMark, markCount, clearMarks
+  markOf, setMark, markCount, clearMarks,
+  pushExam, loadExams
 } from './store.js';
 import { supabase, getUserId } from './supabase.js';
 
 // ---------- data source (set per bank) ----------
 let QUESTIONS = [];
 export function setQuestions(arr) { QUESTIONS = Array.isArray(arr) ? arr : []; }
+/** 当前装着的那份题目（个人报告要按它算「做过多少 / 还有多少没做到」） */
+export function getQuestions() { return QUESTIONS; }
 
 // ---------- state ----------
 const EXAM_DEFAULT_COUNTS = { single: 60, multiple: 40, judge: 20, case: 5 };
@@ -725,6 +728,7 @@ function start(p, atIdx) {
   }
   if (atIdx !== undefined && atIdx >= 0 && atIdx < S.pool.length) S.idx = atIdx;
   S.correctCount = 0; S.finished = false;
+  S.examLogged = false;      // 本场考试还没记进「历次成绩」（防重复交卷记两笔）
   // 做题用时：从头开始 = 归零重开表；继续练习 = 接着上次的累计值起表（不含退出期间的空档）
   if (resumed) {
     S.elapsedMs = (typeof p.elapsedMs === 'number' && p.elapsedMs > 0) ? p.elapsedMs : 0;
@@ -957,16 +961,24 @@ function checkCurrent() {
 }
 
 // ---------- correctness ----------
-function isCorrect(q, i) {
-  const r = getRender(q);
-  const a = S.userAns[i];
+/**
+ * 判一个作答对不对（**不依赖 S 的下标**）。
+ * isCorrect 只是它的薄包装：练习页按当前位置取 S.userAns[i]，个人报告则按累计账本里的作答判。
+ * 判分口径只此一份 —— 各处都从这里走，别另写一套。
+ */
+export function judgeAnswer(q, a) {
   if (a === null || a === undefined) return false;
+  const r = getRender(q);
   if (r.judge) return a === r.correctIndex;
   const ci = Array.isArray(r.correctIndex) ? r.correctIndex : [r.correctIndex];
   const sa = Array.isArray(a) ? a : [a];
   if (sa.length !== ci.length) return false;
   const sa2 = [...sa].sort(), sc = [...ci].sort();
   return sa2.every((v, k) => v === sc[k]);
+}
+
+function isCorrect(q, i) {
+  return judgeAnswer(q, S.userAns[i]);
 }
 function answerText(q) {
   const r = getRender(q);
@@ -1113,6 +1125,7 @@ function finishExam(auto) {
   }
   const total = S.pool.length, wrong = total - right;
   score = Math.round(score * 10) / 10;
+  S.autoSubmitted = !!auto;      // 结果页标题与考试记录都要用：是不是时间到自动交的
   showResult(score, right, wrong, total, '模拟考试' + (auto ? '（时间到自动交卷）' : ''), true);
 }
 
@@ -1122,6 +1135,19 @@ function showResult(scoreNum, right, wrong, total, title, isExam) {
   pauseElapsed(); S.lastUsedMs = S.elapsedMs; stopElapsedTicker();
   // 只清**当前模式**的进度：练完顺序练习不该把组卷模拟/错题练习的进度一起清掉
   clearProgress(S.mode);
+  // 模拟考试：把这一场记进「历次成绩」。放在 clearProgress 之后 —— 清的是续做用的快照，
+  // 考试记录是另一个账本（clearProgress 不碰 exams），用户回头要能看到每一场考了多少分。
+  if (isExam && !S.examLogged) {
+    S.examLogged = true;
+    pushExam({
+      at: Date.now(),
+      total, right,
+      score: scoreNum,
+      full: S.fullScore || 100,
+      ms: S.lastUsedMs || 0,
+      auto: !!S.autoSubmitted
+    });
+  }
   stopTimer();
   for (let i = 0; i < S.pool.length; i++) { if (!isCorrect(S.pool[i], i)) addId(LS.wrong, S.pool[i].id); }
   $('practice').classList.add('hide');
@@ -1495,6 +1521,8 @@ if (import.meta.env.DEV) {
     usedMs, clockText, humanDuration, analysisStat,
     defaultPrefs: DEFAULT_PREFS, prefsKey, syncPrefsFromCloud, applySettings,
     // 「当前装的是哪个题库的题」——切题库的验收要断言这一点（QUESTIONS 会随 setQuestions 变）
-    questions: () => QUESTIONS
+    questions: () => QUESTIONS,
+    // 判分口径：check_stats.mjs 拿它跟 api/admin-stats.js 的同名逻辑做交叉比对，防止两边漂移
+    isCorrect, judgeAnswer, loadExams
   };
 }

@@ -1,4 +1,6 @@
+import { randomInt } from 'node:crypto';
 import { createClient } from '@supabase/supabase-js';
+import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 
 const URL = process.env.SUPABASE_URL;
@@ -25,6 +27,17 @@ function authUser(req) {
 
 function str(v) {
   return String(v == null ? '' : v).trim().slice(0, 40);
+}
+
+/**
+ * 临时密码：8 位，剔除 0/O/1/l/I 这类肉眼易混字符（要念给本人听 / 手抄）。
+ * 用 CSPRNG（randomInt）而非 Math.random —— 临时密码也是真密码。
+ */
+const PW_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
+function genTempPassword(len = 8) {
+  let s = '';
+  for (let i = 0; i < len; i++) s += PW_CHARS[randomInt(0, PW_CHARS.length)];
+  return s;
 }
 
 /** 全部用户 + 每人的题库数量（管理员专用视图） */
@@ -59,7 +72,9 @@ async function listUsers(supa) {
 /**
  * /api/admin-users
  *   GET  → { ok, users:[...], me:{id,isAdmin} }      需要管理员
- *   POST → { action:'updateUser', userId, isAdmin?, dept?, role? }  需要管理员
+ *   POST → { action:'updateUser', userId, isAdmin?, dept?, role? }       需要管理员
+ *   POST → { action:'resetPassword', userId, password? }                 需要管理员
+ *          → { ok, username, tempPassword, generated }   临时密码仅此次返回
  *
  * 权限：请求头 Bearer 令牌验签通过 **且** 该账号 is_admin = true。
  * 仅此接口使用 service_role 访问 exam_accounts（该表已开启 RLS 且无策略，前端读不到）。
@@ -88,7 +103,9 @@ export default async function handler(req, res) {
     let body;
     try { body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body; }
     catch { return json(res, 400, { error: '请求体格式错误' }); }
-    if (!body || body.action !== 'updateUser') return json(res, 400, { error: '不支持的操作' });
+    if (!body || (body.action !== 'updateUser' && body.action !== 'resetPassword')) {
+      return json(res, 400, { error: '不支持的操作' });
+    }
 
     const userId = str(body.userId);
     if (!userId) return json(res, 400, { error: '缺少 userId' });
@@ -97,6 +114,30 @@ export default async function handler(req, res) {
       .from('exam_accounts').select('id,username,is_admin').eq('id', userId).maybeSingle();
     if (!target) return json(res, 404, { error: '该账号不存在' });
 
+    /* ---------- 重置密码（管理员代客重置） ---------- */
+    if (body.action === 'resetPassword') {
+      // 管理员可以自己指定新密码；不指定则由服务端生成临时密码
+      const custom = typeof body.password === 'string' ? body.password.trim() : '';
+      if (custom && custom.length < 6) return json(res, 400, { error: '密码至少 6 位' });
+      if (custom.length > 64) return json(res, 400, { error: '密码最多 64 位' });
+
+      const tempPassword = custom || genTempPassword(8);
+      const password_hash = await bcrypt.hash(tempPassword, 10);
+
+      const { error: pwErr } = await supa
+        .from('exam_accounts').update({ password_hash }).eq('id', userId);
+      if (pwErr) return json(res, 500, { error: '重置失败：' + pwErr.message });
+
+      // 明文只在这一个响应里出现一次，库里只有 bcrypt 哈希
+      return json(res, 200, {
+        ok: true,
+        username: target.username,
+        tempPassword,
+        generated: !custom
+      });
+    }
+
+    /* ---------- 修改资料（部门 / 角色 / 管理员标记） ---------- */
     const patch = {};
     if (body.dept !== undefined) patch.dept = str(body.dept);
     if (body.role !== undefined) patch.role = str(body.role);

@@ -4,6 +4,8 @@ import { parseWorkbook, buildTemplateWorkbook, buildBankWorkbook } from './impor
 import { getUsername } from './auth.js';
 import { isAdmin, knownTags, ensureUsers } from './admin.js';
 import { openQEdit } from './qedit.js';
+import { getQuestions, putQuestions, dropQuestions } from './bankcache.js';
+import { showBoot, hideBoot } from './bootmask.js';
 
 let pendingImport = null;   // { questions, caseCount }
 let onOpenBank = null;
@@ -96,21 +98,60 @@ async function saveImport() {
   });
   if (error) { alert('保存失败：' + error.message); return; }
   closeImport();
-  await renderBanks();
+  invalidateBankList();
+  await renderBanks({ force: true });
 }
 
-async function listBanks() {
-  const me = getUserId();
-  const { data, error } = await supabase
-    .from('exam_banks')
-    .select('id,name,case_count,created_at,questions,user_id,owner_name,visibility,allow_depts,allow_roles')
-    .order('created_at', { ascending: false });
-  if (error) { alert('加载题库失败：' + error.message); return []; }
-  return (data || []).map(b => ({
+// ============================================================
+// 题库列表：只取元数据 + 内存缓存（v2.29）
+// ------------------------------------------------------------
+// 原来的查询把 questions 整列也拉了回来，唯一用途是在浏览器里数一下长度
+// （列表上要显示「多少题」）。questions 是完整题目数组，一个百题题库就几十上百 KB，
+// 十几个库加起来是 MB 级；而进列表页、改名、删库、改可见范围之后都会重拉一次。
+//
+// 现在题数存在 question_count 列里（supabase/perf.sql 用触发器维护，任何写入路径都同步），
+// 列表只查元数据，请求体从「全部题目」降到「每库一行摘要」。
+//
+// 兼容退路：万一线上还没跑 perf.sql，question_count 列不存在（PostgREST 报 42703），
+//          自动退回旧查询 —— 慢，但页面不会白屏。**只退一次**：把探测结果记下来，
+//          否则每次进列表都先发一个注定失败的请求，反而更慢。
+// ============================================================
+const BANK_COLS = 'id,name,case_count,question_count,created_at,user_id,owner_name,visibility,allow_depts,allow_roles';
+const BANK_COLS_LEGACY = 'id,name,case_count,created_at,questions,user_id,owner_name,visibility,allow_depts,allow_roles';
+
+let bankListCache = null;     // 最近一次成功的列表
+let bankListCacheAt = 0;
+const BANK_TTL = 30 * 1000;   // 超过 30 秒就顺手在后台刷一次
+let missingCountColumn = false;
+
+/** PostgREST 的「列不存在」有多种包装形式，这里认全 */
+function isMissingColumn(err) {
+  if (!err) return false;
+  const code = String(err.code || '');
+  const msg = String(err.message || '') + ' ' + String(err.details || '');
+  return code === '42703' || code === 'PGRST204' || /question_count|column\s+\S+\s+does not exist/i.test(msg);
+}
+
+async function queryBankRows() {
+  if (!missingCountColumn) {
+    const r = await supabase.from('exam_banks').select(BANK_COLS).order('created_at', { ascending: false });
+    if (!r.error) return r;
+    if (!isMissingColumn(r.error)) return r;
+    missingCountColumn = true;
+    console.warn('[banks] 线上还没有 question_count 列，已退回旧查询（较慢）。建议执行 supabase/perf.sql');
+  }
+  return supabase.from('exam_banks').select(BANK_COLS_LEGACY).order('created_at', { ascending: false });
+}
+
+function mapBankRow(b, me) {
+  return {
     id: b.id,
     name: b.name,
     caseCount: b.case_count || 0,
-    count: Array.isArray(b.questions) ? b.questions.length : 0,
+    // 新路径读 question_count；旧路径只能数数组长度（此时 data 里确实带着 questions）
+    count: typeof b.question_count === 'number'
+      ? b.question_count
+      : (Array.isArray(b.questions) ? b.questions.length : 0),
     createdAt: b.created_at,
     userId: b.user_id,
     ownerName: b.owner_name || '',
@@ -118,7 +159,29 @@ async function listBanks() {
     allowDepts: Array.isArray(b.allow_depts) ? b.allow_depts : [],
     allowRoles: Array.isArray(b.allow_roles) ? b.allow_roles : [],
     mine: b.user_id === me
-  }));
+  };
+}
+
+/**
+ * @param {{cache?:boolean}} [opts] cache=true 时优先用 30 秒内的缓存（切练习内容的下拉用得上，
+ *        弹层要立刻出来，没必要为了 30 秒内的变化再等一个往返）
+ */
+async function listBanks(opts) {
+  const useCache = !!(opts && opts.cache);
+  if (useCache && bankListCache && Date.now() - bankListCacheAt < BANK_TTL) return bankListCache;
+  const me = getUserId();
+  const { data, error } = await queryBankRows();
+  if (error) { alert('加载题库失败：' + error.message); return bankListCache || []; }
+  const rows = (data || []).map(b => mapBankRow(b, me));
+  bankListCache = rows;
+  bankListCacheAt = Date.now();
+  return rows;
+}
+
+/** 让列表缓存失效（改名 / 删库 / 改可见范围 / 导入之后必须调，否则会看到旧名字） */
+export function invalidateBankList() {
+  bankListCache = null;
+  bankListCacheAt = 0;
 }
 
 /** 可见范围徽标 */
@@ -176,9 +239,10 @@ function bankRow(b) {
     </div>`;
 }
 
-export async function renderBanks() {
-  const banks = await listBanks();
+/** 把一组题库画到列表里（纯渲染，不发请求） */
+function paintBanks(banks) {
   const box = document.getElementById('bankList');
+  if (!box) return;
   if (!banks.length) {
     box.innerHTML = '<div class="muted" style="padding:20px 0;text-align:center">还没有题库，点击上方「导入题库」开始吧。</div>';
     return;
@@ -208,18 +272,83 @@ export async function renderBanks() {
   });
 }
 
+/**
+ * 渲染题库列表。
+ * @param {{force?:boolean}} [opts]  force=true 时跳过缓存直接重拉（改名/删库后必须用）
+ *
+ * 默认走「先画缓存、再后台刷新」：切回列表页时内容是立刻出现的，
+ * 不会先给一片空白再突然填上 —— 这个项目里列表页会被反复进出（管理页返回、
+ * 打字练习返回、切换练习内容返回），每次都空等一下很难受。
+ */
+export async function renderBanks(opts) {
+  const force = !!(opts && opts.force);
+  if (bankListCache && !force) {
+    paintBanks(bankListCache);
+    if (Date.now() - bankListCacheAt > BANK_TTL) {
+      // 后台刷新：失败就算了，屏幕上已经有东西了
+      listBanks().then(rows => { if (Array.isArray(rows) && rows.length) paintBanks(rows); }).catch(() => {});
+    }
+    return;
+  }
+  const banks = await listBanks();
+  paintBanks(banks);
+}
+
+/**
+ * 取某个题库的题目（带缓存）。
+ * 「从列表点练习」和「刷新页面恢复上次题库」会拉到同一份数据，
+ * 5 分钟内复用，省掉一次几百 KB 的下载。任何改动题目的地方（编辑/导入/删库）
+ * 都会调 dropQuestions 让缓存失效，不会读到旧题。
+ */
+async function fetchBankQuestions(id) {
+  const cached = getQuestions(id);
+  if (cached) return cached;
+  const { data, error } = await supabase.from('exam_banks').select('questions').eq('id', id).single();
+  if (error) throw new Error(error.message);
+  const qs = Array.isArray(data && data.questions) ? data.questions : [];
+  putQuestions(id, qs);
+  return qs;
+}
+
 async function openBank(b) {
-  const { data, error } = await supabase.from('exam_banks').select('questions').eq('id', b.id).single();
-  if (error) { alert('打开失败：' + error.message); return; }
-  if (!onOpenBank) return;
-  await onOpenBank({ id: b.id, name: b.name, questions: data.questions || [] });
+  // 大题库要拉几百 KB，这期间界面没有任何反馈 → 用启动遮罩顶上（加载快就不会出现）
+  showBoot('正在打开题库…');
+  let qs;
+  try {
+    qs = await fetchBankQuestions(b.id);
+  } catch (e) {
+    hideBoot();
+    alert('打开失败：' + e.message);
+    return;
+  }
+  if (!onOpenBank) { hideBoot(); return; }
+  try {
+    await onOpenBank({ id: b.id, name: b.name, questions: qs });
+  } finally {
+    hideBoot();
+  }
 }
 
 export async function openBankById(id) {
+  const cached = getQuestions(id);
+  if (cached) {
+    // 命中缓存就只补一个名字（单列查询，几十字节），不再重下整份题目
+    const name = await bankNameOf(id);
+    if (onOpenBank) await onOpenBank({ id, name, questions: cached });
+    return true;
+  }
   const { data, error } = await supabase.from('exam_banks').select('id,name,questions').eq('id', id).single();
   if (error || !data) return false;
-  if (onOpenBank) await onOpenBank({ id: data.id, name: data.name, questions: data.questions || [] });
+  const qs = Array.isArray(data.questions) ? data.questions : [];
+  putQuestions(id, qs);
+  if (onOpenBank) await onOpenBank({ id: data.id, name: data.name, questions: qs });
   return true;
+}
+
+/** 只取名字（缓存命中时补顶栏用；失败给空串，不影响进练习） */
+async function bankNameOf(id) {
+  const { data } = await supabase.from('exam_banks').select('name').eq('id', id).maybeSingle();
+  return (data && data.name) || '';
 }
 
 async function renameBank(b) {
@@ -228,7 +357,8 @@ async function renameBank(b) {
   if (!name || !name.trim()) return;
   const { error } = await supabase.from('exam_banks').update({ name: name.trim() }).eq('id', b.id);
   if (error) { alert('重命名失败：' + error.message); return; }
-  await renderBanks();
+  invalidateBankList();                                // 名字变了，缓存必须作废
+  await renderBanks({ force: true });
 }
 
 async function deleteBank(b) {
@@ -237,14 +367,21 @@ async function deleteBank(b) {
   if (!confirm(`确定删除题库「${b.name}」？${extra}\n该题库下的错题/收藏/进度也会一并删除，且不可恢复。`)) return;
   const { error } = await supabase.from('exam_banks').delete().eq('id', b.id);
   if (error) { alert('删除失败：' + error.message); return; }
-  await renderBanks();
+  dropQuestions(b.id);                                 // 题目缓存也要清，别留着一份已删除的库
+  invalidateBankList();
+  await renderBanks({ force: true });
 }
 
 async function exportBank(b) {
   if (!canManage(b)) { denyManage(b); return; }        // 第二道闸
-  const { data, error } = await supabase.from('exam_banks').select('questions').eq('id', b.id).single();
-  if (error) { alert('导出失败：' + error.message); return; }
-  const wb = buildBankWorkbook(data.questions || []);
+  let qs;
+  try {
+    qs = await fetchBankQuestions(b.id);               // 有缓存就用缓存，省一次整库下载
+  } catch (e) {
+    alert('导出失败：' + e.message);
+    return;
+  }
+  const wb = buildBankWorkbook(qs);
   XLSX.writeFile(wb, (b.name || '题库') + '.xlsx');
 }
 
@@ -379,7 +516,8 @@ async function saveScope() {
     }).eq('id', scopeBank.id);
     if (error) throw new Error(error.message);
     closeScope();
-    await renderBanks();
+    invalidateBankList();                              // 可见范围徽标变了
+    await renderBanks({ force: true });
   } catch (e) {
     scopeMsg('保存失败：' + e.message, true);
   } finally {
@@ -487,7 +625,8 @@ export async function openBankPicker() {
   hint.textContent = '';
   modal.classList.remove('hide');
   let banks = [];
-  try { banks = await listBanks(); } catch (e) { banks = []; }
+  // 优先用 30 秒内的缓存：下拉要的是"立刻出现"，不是"绝对最新"
+  try { banks = await listBanks({ cache: true }); } catch (e) { banks = []; }
 
   const onTyping = isOnTypingScreen();
   const mine = banks.filter(b => b.mine);

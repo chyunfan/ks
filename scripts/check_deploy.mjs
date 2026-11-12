@@ -1,5 +1,7 @@
 // 检查已部署页面：托管方、资源可用性、部署 JS 的内容特征、api 函数是否在线
-const base = 'https://www.chyunfan.cn/credit-exam-cloud';
+// ⚠ v2.24 起线上产物零外链、且 assets/ 里的 hash 每次都变，本脚本里写死的
+//   assets/index-B_SaLDxl.js 已失效；域名已随仓库更名切到 /ks。保留仅作历史参考。
+const base = 'https://www.chyunfan.cn/ks';
 
 function countOcc(s, n) {
   let c = 0, i = 0;

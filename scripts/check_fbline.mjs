@@ -20,7 +20,7 @@ const EXE = 'C:/Users/cyf/AppData/Local/ms-playwright/chromium-1140/chrome-win/c
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const PORT = 5211;
-const URL_APP = `http://localhost:${PORT}/credit-exam-cloud/`;
+const URL_APP = `http://localhost:${PORT}/ks/`;
 const SHOTS = path.join(ROOT, 'shots');
 fs.mkdirSync(SHOTS, { recursive: true });
 

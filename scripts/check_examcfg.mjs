@@ -12,6 +12,7 @@
  *  T8  满分随配置实时变化；「恢复默认」在题库充足时回到 100 分
  *  T9  真正开考：抽到的题量 = min(配置, 可用)，满分 = 实际分值合计
  *  T10 界面提示"已保存到题库"
+ *  T13 每种题型可设分值（v2.33）：实时重算满分、按题库保存、清空回默认、恢复默认一并复位
  *
  * 用法：node scripts/check_examcfg.mjs
  */
@@ -105,8 +106,9 @@ const readRows = () => page.evaluate(() => Array.from(document.querySelectorAll(
   t: r.dataset.t,
   label: r.querySelector('.lbl').textContent.trim(),
   hint: r.querySelector('.hint').textContent.trim(),
-  avail: parseInt(r.querySelector('input').getAttribute('data-avail'), 10),
-  value: parseInt(r.querySelector('input').value, 10)
+  avail: parseInt(r.querySelector('.ec-num').getAttribute('data-avail'), 10),
+  value: parseInt(r.querySelector('.ec-num').value, 10),
+  pt: parseFloat(r.querySelector('.ec-pt').value)
 })));
 const readSum = () => page.evaluate(() => ({
   text: document.getElementById('ecSummary').textContent,
@@ -117,8 +119,8 @@ const readSum = () => page.evaluate(() => ({
   card: document.getElementById('examCounts').textContent
 }));
 const setCount = async (t, v) => {
-  await page.fill(`#ecRows input[data-t="${t}"]`, String(v));
-  await page.evaluate(t => document.querySelector(`#ecRows input[data-t="${t}"]`).dispatchEvent(new Event('change', { bubbles: true })), t);
+  await page.fill(`#ecRows .ec-num[data-t="${t}"]`, String(v));
+  await page.evaluate(t => document.querySelector(`#ecRows .ec-num[data-t="${t}"]`).dispatchEvent(new Event('change', { bubbles: true })), t);
   await page.waitForTimeout(80);
 };
 const counts = () => page.evaluate(() => JSON.parse(JSON.stringify(window.__exam.S.examCounts)));
@@ -188,11 +190,11 @@ await page.click('#ecRows .ec-max[data-t="single"]');
 await page.waitForTimeout(120);
 chk((await counts()).single === 5, 'T4 「全部」→ 取该题型可用量 5', String((await counts()).single));
 // 超量输入
-await page.fill('#ecRows input[data-t="single"]', '999');
-await page.evaluate(() => document.querySelector('#ecRows input[data-t="single"]').dispatchEvent(new Event('change', { bubbles: true })));
+await page.fill('#ecRows .ec-num[data-t="single"]', '999');
+await page.evaluate(() => document.querySelector('#ecRows .ec-num[data-t="single"]').dispatchEvent(new Event('change', { bubbles: true })));
 await page.waitForTimeout(150);
 chk((await counts()).single === 5, 'T4 输入 999 → 自动收敛到可用量 5', String((await counts()).single));
-chk((await page.$eval('#ecRows input[data-t="single"]', el => el.value)) === '5', 'T4 输入框显示值同步收敛为 5');
+chk((await page.$eval('#ecRows .ec-num[data-t="single"]', el => el.value)) === '5', 'T4 输入框显示值同步收敛为 5');
 
 /* ================= T8 满分实时计算 ================= */
 await setCount('multiple', 4);
@@ -285,6 +287,68 @@ await page.screenshot({ path: path.join(ROOT, 'shots', 'examcfg-mobile.png'), fu
 /* ---------- 截图：手机端「组卷设置」展开态 ---------- */
 await page.evaluate(() => { window.__exam.S.pool = []; document.getElementById('practice').classList.add('hide'); document.getElementById('home').classList.remove('hide'); window.__exam.refreshHomeUI(); });
 await page.waitForTimeout(200);
+/* ================= T13 每种题型可设分值（v2.33） =================
+   用户原话：「每种题型可以设置分值」。分值就在题型行标题里，内联输入框，
+   改完满分立刻重算；按题库各自保存（examCfgByBank[...].points）。 */
+await page.evaluate(() => {
+  if (document.getElementById('examCfgBody').classList.contains('hide')) document.getElementById('examCfgHead').click();
+});
+await page.waitForTimeout(200);
+rows = await readRows();
+chk(rows.map(r => r.pt).join('/') === '0.5/1/0.5/4', 'T13 题型行显示每题分值，默认 0.5/1/0.5/4',
+  rows.map(r => r.t + '=' + r.pt).join(' '));
+
+const setPt = async (t, v) => {
+  await page.fill(`#ecRows .ec-pt[data-t="${t}"]`, String(v));
+  await page.evaluate(t => document.querySelector(`#ecRows .ec-pt[data-t="${t}"]`)
+    .dispatchEvent(new Event('change', { bubbles: true })), t);
+  await page.waitForTimeout(100);
+};
+// 单选 0.5 → 1.5：满分 = 97×1.5 + 51×1 + 24×0.5 + 5×4 = 228.5
+await setPt('single', 1.5);
+sum = await readSum();
+const c1 = await counts();
+const want1 = Math.round((Math.min(c1.single, 97) * 1.5 + Math.min(c1.multiple, 51) * 1
+  + Math.min(c1.judge, 24) * 0.5 + Math.min(c1.case, 5) * 4) * 10) / 10;
+chk(sum.full === want1, 'T13 改单选分值为 1.5 → 满分实时重算', sum.full + ' / 期望 ' + want1);
+chk(want1 === 228.5, 'T13 满分口径 = Σ min(配置, 可用) × 分值', String(want1));
+
+const storedPt = await page.evaluate(() => JSON.parse(localStorage.getItem(window.__exam.prefsKey()) || 'null'));
+chk(storedPt && storedPt.examCfgByBank && storedPt.examCfgByBank['bank-big'].points &&
+  storedPt.examCfgByBank['bank-big'].points.single === 1.5,
+  'T13 分值写进 examCfgByBank[bank-big].points（按题库保存）',
+  JSON.stringify(storedPt && storedPt.examCfgByBank['bank-big'].points));
+
+// 换题库：分值跟着题库走，别的库仍是默认值
+await openBank('bank-small', await page.evaluate(() => window.__small));
+await toExamMode();
+rows = await readRows();
+chk(rows.find(r => r.t === 'single').pt === 0.5, 'T13 换到小库 → 分值用该题库自己的（默认 0.5）',
+  rows.map(r => r.t + '=' + r.pt).join(' '));
+await openBank('bank-big', await page.evaluate(() => window.__big));
+await toExamMode();
+rows = await readRows();
+chk(rows.find(r => r.t === 'single').pt === 1.5, 'T13 切回大库 → 自定义分值原样带出',
+  rows.map(r => r.t + '=' + r.pt).join(' '));
+
+// 清空 / 填 0：回该题型默认值，绝不出现「0 分题」
+await setPt('single', '');
+rows = await readRows();
+chk(rows.find(r => r.t === 'single').pt === 0.5, 'T13 清空分值 → 回到该题型默认值（不会出现 0 分题）',
+  String(rows.find(r => r.t === 'single').pt));
+await setPt('single', 0);
+rows = await readRows();
+chk(rows.find(r => r.t === 'single').pt === 0.5, 'T13 填 0 → 同样回默认值', String(rows.find(r => r.t === 'single').pt));
+
+// 恢复默认：分值也跟着回到出厂值，才是"标准 100 分整卷"
+await page.click('#ecDefault');
+await page.waitForTimeout(200);
+rows = await readRows();
+sum = await readSum();
+chk(rows.map(r => r.pt).join('/') === '0.5/1/0.5/4', 'T13 「恢复默认」把分值也回出厂 0.5/1/0.5/4',
+  rows.map(r => r.t + '=' + r.pt).join(' '));
+chk(sum.full === 100, 'T13 恢复默认后满分回到 100（60×0.5+40×1+20×0.5+5×4）', String(sum.full));
+
 const shotPanel = async (file, note) => {
   await page.evaluate(() => {
     if (document.getElementById('examCfgBody').classList.contains('hide')) document.getElementById('examCfgHead').click();

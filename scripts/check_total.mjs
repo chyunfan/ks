@@ -100,8 +100,9 @@ const toExamMode = async () => {
 
 const readRows = () => page.evaluate(() => Array.from(document.querySelectorAll('#ecRows .ec-row')).map(r => ({
   t: r.dataset.t,
-  avail: parseInt(r.querySelector('input').getAttribute('data-avail'), 10),
-  value: parseInt(r.querySelector('input').value, 10)
+  avail: parseInt(r.querySelector('.ec-num').getAttribute('data-avail'), 10),
+  value: parseInt(r.querySelector('.ec-num').value, 10),
+  pt: parseFloat(r.querySelector('.ec-pt').value)
 })));
 const readSum = () => page.evaluate(() => ({
   text: document.getElementById('ecSummary').textContent,
@@ -119,8 +120,8 @@ const setTotal = async (v) => {
   await page.waitForTimeout(150);
 };
 const setCount = async (t, v) => {
-  await page.fill(`#ecRows input[data-t="${t}"]`, String(v));
-  await page.evaluate(t => document.querySelector(`#ecRows input[data-t="${t}"]`).dispatchEvent(new Event('change', { bubbles: true })), t);
+  await page.fill(`#ecRows .ec-num[data-t="${t}"]`, String(v));
+  await page.evaluate(t => document.querySelector(`#ecRows .ec-num[data-t="${t}"]`).dispatchEvent(new Event('change', { bubbles: true })), t);
   await page.waitForTimeout(100);
 };
 const toggle = async (id) => {

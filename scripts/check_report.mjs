@@ -291,6 +291,29 @@ try {
   chk(hint.includes('4') && hint.includes('100') && hint.includes('75%'),
     'A1 首页「我的报告」入口副标题显示 已做 4 / 100 · 正确率 75%', hint);
 
+  // v2.35：报告与排行不再是两个大板块，收成页面最底部的一行注脚
+  const footInfo = await page.evaluate(() => {
+    const foot = document.querySelector('#home .home-foot');
+    const entry = document.getElementById('reportEntry');
+    const rank = document.getElementById('rankEntry');
+    const vis = [...document.querySelectorAll('#home .section')]
+      .filter(s => s.getBoundingClientRect().height > 0);
+    const lastBottom = vis.length ? Math.max(...vis.map(s => s.getBoundingClientRect().bottom)) : 0;
+    const fr = foot ? foot.getBoundingClientRect() : null;
+    const card = document.querySelector('#home .card');
+    const cr = card ? card.getBoundingClientRect() : null;
+    return {
+      inFoot: !!(foot && entry && foot.contains(entry) && rank && foot.contains(rank)),
+      afterSections: !!fr && fr.top >= lastBottom - 2,
+      nearCardBottom: !!(fr && cr) && (cr.bottom - fr.bottom) < 46,
+      noBigBlock: !vis.some(s => /我的报告|做题排行/.test(s.textContent)),
+      small: !!entry && parseFloat(getComputedStyle(entry).fontSize) <= 12.5
+    };
+  });
+  chk(footInfo.inFoot && footInfo.afterSections && footInfo.nearCardBottom
+      && footInfo.noBigBlock && footInfo.small,
+    'A1b 报告/排行是页面最底部的一行注脚（不再是两个大板块）', JSON.stringify(footInfo));
+
   await page.click('#reportEntry');
   await page.waitForTimeout(300);
   let r = await reportState(page);

@@ -208,65 +208,32 @@
           <h2>练习模式</h2>
           <div class="mode-grid">
             <div class="mode active" data-mode="sequential">
-              <div class="ic">📚</div><div class="t">顺序练习</div>
+              <div class="mh"><span class="ic">📚</span><span class="t">顺序练习</span></div>
               <div class="d">按题库顺序逐题作答，可随时看答案、查进度</div>
               <div class="rs hide"></div>
             </div>
             <div class="mode" data-mode="exam">
-              <div class="ic">📝</div><div class="t">组卷模拟考试</div>
+              <div class="mh"><span class="ic">📝</span><span class="t">组卷模拟考试</span></div>
               <div class="d">按本库题型自选题量，随机组卷、限时答题，交卷出成绩</div>
               <div class="counts" id="examCounts"></div>
               <div class="rs hide"></div>
             </div>
             <div class="mode" data-mode="wrong">
-              <div class="ic">📕</div><div class="t">错题练习</div>
+              <div class="mh"><span class="ic">📕</span><span class="t">错题练习</span></div>
               <div class="d">仅练习错题集中的题目（忽略“去除”类开关）</div>
               <div class="counts" id="wrongCounts"></div>
               <div class="rs hide"></div>
+              <!-- 原来单独一栏「错题集 / 收藏」，v2.35 并进卡片：逐题回顾是这个模式的次级入口 -->
+              <button type="button" class="lib-link" id="wrongLibBtn">逐题回顾 <b id="wrongCnt">0</b> 题 ›</button>
             </div>
             <div class="mode" data-mode="fav">
-              <div class="ic">⭐</div><div class="t">收藏练习</div>
+              <div class="mh"><span class="ic">⭐</span><span class="t">收藏练习</span></div>
               <div class="d">仅练习你收藏的题目</div>
               <div class="counts" id="favCounts"></div>
               <div class="rs hide"></div>
+              <button type="button" class="lib-link" id="favLibBtn">逐题回顾 <b id="favCnt">0</b> 题 ›</button>
             </div>
           </div>
-        </div>
-
-        <div class="section">
-          <h2>错题集 / 收藏</h2>
-          <div class="lib-btns">
-            <button type="button" class="lib-btn2 wrong" id="wrongLibBtn">
-              <span class="lib-ic">📕</span><span class="lib-t">错题集回顾</span><span class="lib-n" id="wrongCnt">0</span>
-            </button>
-            <button type="button" class="lib-btn2 fav" id="favLibBtn">
-              <span class="lib-ic">⭐</span><span class="lib-t">收藏回顾</span><span class="lib-n" id="favCnt">0</span>
-            </button>
-          </div>
-        </div>
-
-        <div class="section">
-          <h2>我的报告</h2>
-          <button type="button" class="rank-entry" id="reportEntry">
-            <span class="rk-ic">📊</span>
-            <span class="rk-body">
-              <span class="rk-t">查看练习正确率与考试成绩</span>
-              <span class="rk-d" id="reportHint">做完题后可以在这里看正确率</span>
-            </span>
-            <span class="rk-go">查看 ›</span>
-          </button>
-        </div>
-
-        <div class="section">
-          <h2>做题排行</h2>
-          <button type="button" class="rank-entry" id="rankEntry">
-            <span class="rk-ic">🏆</span>
-            <span class="rk-body">
-              <span class="rk-t">查看本库做题数排名</span>
-              <span class="rk-d" id="rankHint">看看这个题库里各自做了多少题</span>
-            </span>
-            <span class="rk-go">查看 ›</span>
-          </button>
         </div>
 
         <div class="section">
@@ -279,31 +246,38 @@
           </div>
         </div>
 
+        <!-- 练习选项（v2.33）：标题就是一个折叠按钮，选项默认收起，点一下才铺开 -->
         <div class="section">
-          <h2>练习选项 <span id="prefsHint" style="font-size:11.5px;font-weight:400;color:var(--sub)">改完自动记住（跟随账号）</span></h2>
-          <div class="opt-row">
-            <div><div class="lbl">默认显示答案</div><div class="hint">开启后每题直接显示正确答案（学习模式）</div></div>
-            <label class="switch"><input type="checkbox" id="showAns"><span class="slider"></span></label>
-          </div>
-          <div class="opt-row">
-            <div><div class="lbl">去除多选全选题目</div><div class="hint">开启后剔除“所有选项都正确”的多选题</div></div>
-            <label class="switch"><input type="checkbox" id="rmAll"><span class="slider"></span></label>
-          </div>
-          <div class="opt-row">
-            <div><div class="lbl">去除正确的判断题</div><div class="hint">开启后剔除答案为“正确”的判断题</div></div>
-            <label class="switch"><input type="checkbox" id="rmCorrectJudge"><span class="slider"></span></label>
-          </div>
-          <div class="opt-row">
-            <div><div class="lbl">选完展示正确答案</div><div class="hint">单选/判断题选完即显示；多选题在练习中点「确定」核对并显示对错</div></div>
-            <label class="switch"><input type="checkbox" id="revealAfter" checked><span class="slider"></span></label>
-          </div>
-          <div class="opt-row">
-            <div><div class="lbl">展示解析</div><div class="hint">回显答案后在下方显示该题解析<span class="ana-stat" id="anaStat"></span></div></div>
-            <label class="switch"><input type="checkbox" id="showAnalysis" checked><span class="slider"></span></label>
-          </div>
-          <div class="opt-row">
-            <div><div class="lbl">答对自动移出错题集</div><div class="hint">开启后某道错题再次答对即从错题集移除</div></div>
-            <label class="switch"><input type="checkbox" id="autoRemoveWrong" checked><span class="slider"></span></label>
+          <button type="button" class="fold-head" id="prefsHead" aria-expanded="false" aria-controls="prefsBody">
+            <span class="fold-tt">练习选项</span>
+            <span class="fold-sub" id="prefsHint">改完自动记住（跟随账号）</span>
+            <span class="arr" id="prefsArr">▸</span>
+          </button>
+          <div class="fold-body hide" id="prefsBody">
+            <div class="opt-row">
+              <div><div class="lbl">默认显示答案</div><div class="hint">开启后每题直接显示正确答案（学习模式）</div></div>
+              <label class="switch"><input type="checkbox" id="showAns"><span class="slider"></span></label>
+            </div>
+            <div class="opt-row">
+              <div><div class="lbl">去除多选全选题目</div><div class="hint">开启后剔除“所有选项都正确”的多选题</div></div>
+              <label class="switch"><input type="checkbox" id="rmAll"><span class="slider"></span></label>
+            </div>
+            <div class="opt-row">
+              <div><div class="lbl">去除正确的判断题</div><div class="hint">开启后剔除答案为“正确”的判断题</div></div>
+              <label class="switch"><input type="checkbox" id="rmCorrectJudge"><span class="slider"></span></label>
+            </div>
+            <div class="opt-row">
+              <div><div class="lbl">选完展示正确答案</div><div class="hint">单选/判断题选完即显示；多选题在练习中点「确定」核对并显示对错</div></div>
+              <label class="switch"><input type="checkbox" id="revealAfter" checked><span class="slider"></span></label>
+            </div>
+            <div class="opt-row">
+              <div><div class="lbl">展示解析</div><div class="hint">回显答案后在下方显示该题解析<span class="ana-stat" id="anaStat"></span></div></div>
+              <label class="switch"><input type="checkbox" id="showAnalysis" checked><span class="slider"></span></label>
+            </div>
+            <div class="opt-row">
+              <div><div class="lbl">答对自动移出错题集</div><div class="hint">开启后某道错题再次答对即从错题集移除</div></div>
+              <label class="switch"><input type="checkbox" id="autoRemoveWrong" checked><span class="slider"></span></label>
+            </div>
           </div>
         </div>
 
@@ -317,11 +291,13 @@
         <div class="start-hint hide" id="startHint"></div>
 
         <div class="section" id="examCfg">
-          <div class="collapsible-head" id="examCfgHead">
-            <h2>组卷设置（总分可改 · 自选题量 · 实时满分）</h2>
+          <!-- 组卷设置（v2.33）：和「练习选项」同一颗折叠按钮，点标题展开/收起 -->
+          <button type="button" class="fold-head" id="examCfgHead" aria-expanded="false" aria-controls="examCfgBody">
+            <span class="fold-tt">组卷设置</span>
+            <span class="fold-sub">总分可改 · 自选题量 · 分值可改</span>
             <span class="arr" id="examCfgArr">▸</span>
-          </div>
-          <div id="examCfgBody" class="collapsible-body hide">
+          </button>
+          <div id="examCfgBody" class="fold-body hide">
             <!-- 题型行按「当前题库实际有的题型」动态生成，不再写死四行 -->
             <div class="ec-note" id="ecAvail">正在读取题库题型…</div>
             <!-- 试卷总分：先定总分，题量按它自动配；也可以直接微调下面的各题型题量 -->
@@ -346,6 +322,18 @@
             <div class="ec-warn hide" id="ecWarn"></div>
             <div class="ec-saved" id="ecSaved"></div>
           </div>
+        </div>
+
+        <!-- 页脚注脚（v2.35）：报告与排行不再是两个大板块，收成一行小字 -->
+        <div class="home-foot">
+          <button type="button" class="foot-link" id="reportEntry">
+            <span class="foot-ic">📊</span><span class="foot-t">我的报告</span>
+            <span class="foot-d" id="reportHint">做完题后可以在这里看正确率</span>
+          </button>
+          <button type="button" class="foot-link" id="rankEntry">
+            <span class="foot-ic">🏆</span><span class="foot-t">做题排行</span>
+            <span class="foot-d" id="rankHint">看看这个题库里各自做了多少题</span>
+          </button>
         </div>
       </div>
     </div>

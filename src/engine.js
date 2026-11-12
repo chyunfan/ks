@@ -16,6 +16,9 @@ export function getQuestions() { return QUESTIONS; }
 const EXAM_DEFAULT_COUNTS = { single: 60, multiple: 40, judge: 20, case: 5 };
 const EXAM_TYPES = ['single', 'multiple', 'judge', 'case'];
 const EXAM_DEFAULT_TOTAL = 100;        // 组卷目标总分默认值（可改）
+// 各题型「每题分值」的出厂默认（v2.33 起可在界面上直接改，按题库各存一份）。
+// 与默认题量 60/40/20/5 正好配成 100 分 —— 所以「恢复默认（100 分）」= 标准 100 分整卷。
+const EXAM_DEFAULT_POINTS = { single: 0.5, multiple: 1, judge: 0.5, case: 4 };
 // ------------------------------------------------------------
 // 练习选项的「出厂默认值」——只此一处定义，三处引用：
 //   ① S 的初值；② applySettings() 遇到旧快照缺字段时的兜底；③ 账号首次进入（本机+云端都无记录）时套用。
@@ -44,7 +47,7 @@ const S = {
   revealAfter: DEFAULT_PREFS.revealAfter, showAnalysis: DEFAULT_PREFS.showAnalysis,
   autoRemoveWrong: DEFAULT_PREFS.autoRemoveWrong,
   examCounts: Object.assign({}, EXAM_DEFAULT_COUNTS),
-  examPoints: { single: 0.5, multiple: 1, judge: 0.5, case: 4 },
+  examPoints: Object.assign({}, EXAM_DEFAULT_POINTS),
   examTotal: EXAM_DEFAULT_TOTAL,   // 组卷目标总分：用户可以改，题量按它自动配
   examMin: 90,
   bankId: null,
@@ -115,7 +118,8 @@ function applySettings(c) {
   S.revealAfter = prefBool(c.revealAfter, 'revealAfter');
   S.showAnalysis = prefBool(c.showAnalysis, 'showAnalysis');
   S.autoRemoveWrong = prefBool(c.autoRemoveWrong, 'autoRemoveWrong');
-  if (c.examPoints) S.examPoints = Object.assign(S.examPoints, c.examPoints);
+  // 分值：先铺一遍出厂默认再合上快照 —— 免得某个题型缺失时留着上一次的旧值
+  S.examPoints = Object.assign({}, EXAM_DEFAULT_POINTS, c.examPoints || {});
   S.examCounts = Object.assign({}, EXAM_DEFAULT_COUNTS, c.examCounts || {});
   S.examTotal = Number(c.examTotal) > 0 ? Number(c.examTotal) : EXAM_DEFAULT_TOTAL;
   S.examMin = c.examMin || 90;
@@ -139,6 +143,10 @@ export function resetPrefsToDefault() { applyDefaultPrefs(); }
 // ---------- 组卷配置：按题库各存一份 ----------
 /** 切题库时调用：把该题库上次的组卷配置带回首页 */
 export function setBankKey(id) {
+  // 切题库前先把正在编辑的输入框「落定」：题型行随后会被重建，
+  // 而浏览器会在这个被移除的焦点框上补发一次 change —— 那一瞬间 S.bankId
+  // 已经指向新题库了，旧值就会被写进新题库的配置里（v2.33 踩过：小库莫名带上大库的分值）。
+  blurEcInputs();
   S.bankId = id || null;
   loadBankExamCfg();
   _ecSig = '';                 // 题库变了，题型行必须重建
@@ -156,11 +164,17 @@ function loadBankExamCfg() {
   const c = S.examCfgByBank[S.bankId];
   if (c && c.counts) {
     S.examCounts = Object.assign({ single: 0, multiple: 0, judge: 0, case: 0 }, c.counts);
+    // 分值：该题库存过就用它的；v2.33 之前存的配置没有 points 字段 → 回到出厂默认
+    S.examPoints = Object.assign({}, EXAM_DEFAULT_POINTS, c.points || {});
     if (c.total) S.examTotal = clampTotal(c.total);
     if (c.min) S.examMin = c.min;
     return;
   }
-  if (!QUESTIONS.length) { S.examCounts = Object.assign({}, EXAM_DEFAULT_COUNTS); return; }
+  if (!QUESTIONS.length) {
+    S.examCounts = Object.assign({}, EXAM_DEFAULT_COUNTS);
+    S.examPoints = Object.assign({}, EXAM_DEFAULT_POINTS);
+    return;
+  }
   applyDefaultPlan();
 }
 
@@ -182,6 +196,7 @@ function clampTotal(v) {
 function applyDefaultPlan(total) {
   S.examTotal = clampTotal(total === undefined ? EXAM_DEFAULT_TOTAL : total);
   S.examCounts = Object.assign({}, EXAM_DEFAULT_COUNTS);
+  S.examPoints = Object.assign({}, EXAM_DEFAULT_POINTS);   // 分值也回出厂值，才是"标准 100 分整卷"
   const avail = availByType();
   EXAM_TYPES.forEach(t => { if (!(avail[t] > 0)) S.examCounts[t] = 0; });
   fitToTotal(S.examTotal);
@@ -269,7 +284,11 @@ function availByType() {
 }
 function saveBankExamCfg() {
   if (!S.bankId) return;
-  S.examCfgByBank[S.bankId] = { counts: Object.assign({}, S.examCounts), total: S.examTotal, min: S.examMin, updatedAt: Date.now() };
+  S.examCfgByBank[S.bankId] = {
+    counts: Object.assign({}, S.examCounts),
+    points: Object.assign({}, S.examPoints),      // 每种题型的每题分值（v2.33）也按题库保存
+    total: S.examTotal, min: S.examMin, updatedAt: Date.now()
+  };
   showEcSaved();
 }
 function showEcSaved() {
@@ -474,6 +493,11 @@ function syncEcInputs(force) {
     const v = S.examCounts[inp.dataset.t] || 0;
     if (String(inp.value) !== String(v)) inp.value = v;
   });
+  // 分值输入框也跟着状态走（切题库 / 「恢复默认」/ 云端同步都会改它）；正在输入的框不打断
+  document.querySelectorAll('#ecRows .ec-pt').forEach(inp => {
+    const v = fmtPts(S.examPoints[inp.dataset.t]);
+    if (String(inp.value) !== v && document.activeElement !== inp) inp.value = v;
+  });
   const tt = $('ecTotal');
   if (tt && (force || document.activeElement !== tt)) {
     const v = String(clampTotal(S.examTotal));
@@ -500,10 +524,13 @@ function renderExamCfg(force) {
   }
   if (force || sig !== _ecSig) {
     _ecSig = sig;
+    blurEcInputs();          // 重建前先落定焦点框，别让它被移除时补发的 change 乱写
     box.innerHTML = plan.present.map(t => {
       const max = plan.avail[t];
       return '<div class="opt-row ec-row" data-t="' + t + '">' +
-        '<div class="ec-info"><div class="lbl">' + TYPE_NAME[t] + ' <span class="muted">× ' + S.examPoints[t] + ' 分 / ' + TYPE_UNIT[t] + '</span></div>' +
+        '<div class="ec-info"><div class="lbl">' + TYPE_NAME[t] +
+        ' <span class="ec-pts"><input type="number" class="ec-pt" data-t="' + t + '" value="' + fmtPts(S.examPoints[t]) +
+        '" min="0.1" max="999" step="0.5" inputmode="decimal" aria-label="' + TYPE_NAME[t] + '每题分值"> 分 / ' + TYPE_UNIT[t] + '</span></div>' +
         '<div class="hint">题库可用 <b>' + max + '</b> ' + TYPE_UNIT[t] + '</div></div>' +
         '<div class="num-row">' +
         '<button type="button" class="ec-mini ec-step" data-t="' + t + '" data-step="-1" aria-label="减少">−</button>' +
@@ -515,6 +542,32 @@ function renderExamCfg(force) {
   }
   syncEcInputs(force);
   updateMaxScore();
+}
+
+/** 让正在编辑的组卷输入框失焦（切题库 / 重建题型行之前调用） */
+function blurEcInputs() {
+  const el = document.activeElement;
+  if (el && el.closest && el.closest('#ecRows')) el.blur();
+}
+
+/** 分值显示：0.5 就显示 0.5，1 就显示 1（别让 4 显示成 4.0） */
+function fmtPts(v) {
+  const n = Math.round((Number(v) || 0) * 100) / 100;
+  return String(n);
+}
+
+/**
+ * 设置某题型的「每题分值」（v2.33）：收敛到 0.1..999、最多两位小数，并即时保存（题库级 + 账号级）。
+ * 分值只影响满分，**不改题量** —— 改完汇总行会如实给出"还差 / 超出多少分"，
+ * 想让题量重新配平就点「按总分配题」（它正是按各题型分值占比来配的）。
+ */
+function setExamPoint(t, v) {
+  let n = parseFloat(v);
+  if (!isFinite(n) || n <= 0) n = EXAM_DEFAULT_POINTS[t] || 1;   // 清空 / 填 0 / 乱填 → 回到该题型默认值
+  n = Math.max(0.1, Math.min(999, Math.round(n * 100) / 100));
+  S.examPoints[t] = n;
+  saveBankExamCfg(); saveSettings();
+  return fmtPts(n);
 }
 
 /** 设置某题型题量并即时保存（clamp 到 0..可用量） */
@@ -1238,6 +1291,31 @@ function openLib(kind) {
 }
 function closeLib() { $('libModal').classList.add('hide'); }
 
+// ---------- 折叠按钮（v2.33）----------
+/**
+ * 设置折叠态：内容区收起/展开、标题高亮、箭头方向、aria 同步。
+ * 默认收起由 HTML 里的 class="hide" + 箭头 ▸ 决定，这里只负责切换。
+ */
+function setFold(head, body, arr, open) {
+  const h = $(head), b = $(body), a = $(arr);
+  if (b) b.classList.toggle('hide', !open);
+  if (h) {
+    h.classList.toggle('on', !!open);
+    h.setAttribute('aria-expanded', open ? 'true' : 'false');
+  }
+  if (a) a.textContent = open ? '▾' : '▸';
+}
+/** 给折叠按钮挂点击：展开后再按需刷新内容（onOpen），收起不做多余计算 */
+function bindFold(head, body, arr, onOpen) {
+  const h = $(head);
+  if (!h) return;
+  h.addEventListener('click', () => {
+    const open = $(body).classList.contains('hide');
+    setFold(head, body, arr, open);
+    if (open && onOpen) onOpen();
+  });
+}
+
 // ---------- UI bindings ----------
 function bindHome() {
   document.querySelectorAll('.mode').forEach(m => m.addEventListener('click', () => {
@@ -1245,17 +1323,16 @@ function bindHome() {
     m.classList.add('active'); S.mode = m.dataset.mode;
     const exam = S.mode === 'exam';
     $('examCfg').classList.toggle('hide', !exam);
-    if (exam) { renderExamCfg(true); $('examCfgBody').classList.add('hide'); $('examCfgArr').textContent = '▸'; }
+    if (exam) { renderExamCfg(true); setFold('examCfgHead', 'examCfgBody', 'examCfgArr', false); }
     saveSettings();
     // 主按钮与卡片进度都要跟着换：每个模式各有一份进度，「继续练习」指向的是当前模式那一份
     refreshStartActions();
     renderModeResumes();
   }));
-  $('examCfgHead').addEventListener('click', () => {
-    const b = $('examCfgBody'); b.classList.toggle('hide');
-    $('examCfgArr').textContent = b.classList.contains('hide') ? '▸' : '▾';
-    if (!b.classList.contains('hide')) renderExamCfg(true);
-  });
+  // 「组卷设置」：标题本身就是按钮，展开时才重建题型行（收起状态不必算）
+  bindFold('examCfgHead', 'examCfgBody', 'examCfgArr', () => renderExamCfg(true));
+  // 「练习选项」：标题本身就是按钮，选项默认收起（开关状态由 applyUIFromState 统一同步）
+  bindFold('prefsHead', 'prefsBody', 'prefsArr');
   document.querySelectorAll('#typeChips .chip').forEach(c => c.addEventListener('click', () => {
     const t = c.dataset.t; S.types[t] = !S.types[t]; c.classList.toggle('active', S.types[t]);
     updateFilterStat(); renderExamCfg(true);
@@ -1269,8 +1346,9 @@ function bindHome() {
   $('revealAfter').addEventListener('change', e => { S.revealAfter = e.target.checked; saveSettings(); });
   $('showAnalysis').addEventListener('change', e => { S.showAnalysis = e.target.checked; saveSettings(); });
   $('autoRemoveWrong').addEventListener('change', e => { S.autoRemoveWrong = e.target.checked; saveSettings(); });
-  $('wrongLibBtn').addEventListener('click', () => openLib('wrong'));
-  $('favLibBtn').addEventListener('click', () => openLib('fav'));
+  // 「逐题回顾」放在错题/收藏练习卡片里（v2.35）：必须阻止冒泡，否则点它会顺带切换练习模式
+  $('wrongLibBtn').addEventListener('click', e => { e.stopPropagation(); openLib('wrong'); });
+  $('favLibBtn').addEventListener('click', e => { e.stopPropagation(); openLib('fav'); });
   $('libClose').addEventListener('click', closeLib);
   $('libMask').addEventListener('click', closeLib);
   // 继续练习：恢复**当前模式**那一份快照（题序 / 已作答 / 对错揭示 / 考试剩余时间都在里面）。
@@ -1285,7 +1363,14 @@ function bindHome() {
   // ---- 组卷设置：题型行是动态生成的，用事件委托绑定 ----
   // 输入中：只更新汇总（不 clamp、不重建 DOM），避免打断打字
   $('ecRows').addEventListener('input', e => {
-    const inp = e.target.closest ? e.target.closest('.ec-num') : null;
+    const el = e.target;
+    // 分值（v2.33）：输入过程中先按实时值回算满分，不打断打字；收敛与保存交给 change
+    if (el.classList && el.classList.contains('ec-pt')) {
+      const n = parseFloat(el.value);
+      if (isFinite(n) && n > 0) { S.examPoints[el.dataset.t] = Math.min(999, n); updateMaxScore(); }
+      return;
+    }
+    const inp = el.closest ? el.closest('.ec-num') : null;
     if (!inp) return;
     const t = inp.dataset.t;
     const v = parseInt(inp.value, 10);
@@ -1294,7 +1379,15 @@ function bindHome() {
   });
   // 失焦/回车：收敛到 0..可用量，写回输入框，并即时保存（本地 + 云端 + 题库级）
   $('ecRows').addEventListener('change', e => {
-    const inp = e.target.closest ? e.target.closest('.ec-num') : null;
+    const el = e.target;
+    // 已被重建移除的旧输入框补发的事件不算数（否则旧值会写进刚切过去的题库）
+    if (!el || el.isConnected === false) return;
+    if (el.classList && el.classList.contains('ec-pt')) {
+      el.value = setExamPoint(el.dataset.t, el.value);   // 清空/0/乱填 → 回该题型默认分值
+      updateMaxScore();
+      return;
+    }
+    const inp = el.closest ? el.closest('.ec-num') : null;
     if (!inp) return;
     const t = inp.dataset.t;
     inp.value = setExamCount(t, inp.value);
@@ -1410,7 +1503,7 @@ function applyUIFromState() {
   renderExamCfg(true);          // 题型行按当前题库动态生成 + 同步题量输入框
   updateMaxScore();
   $('examCfg').classList.toggle('hide', S.mode !== 'exam');
-  if (S.mode === 'exam') { $('examCfgBody').classList.add('hide'); $('examCfgArr').textContent = '▸'; }
+  if (S.mode === 'exam') setFold('examCfgHead', 'examCfgBody', 'examCfgArr', false);
   updateFilterStat();
 }
 /**

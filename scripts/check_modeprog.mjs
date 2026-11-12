@@ -186,6 +186,22 @@ rs = await rsText();
 chk(['sequential', 'exam', 'wrong', 'fav'].every(m => rs[m] && !rs[m].hide), 'S5 首页四张卡片各自显示进度', JSON.stringify(rs));
 
 /* ================= S6 错题集 / 收藏回顾弹窗也显示该模式的进度 ================= */
+// v2.35：「错题集 / 收藏」原来单独一栏，现在并进两张卡片里，别再冒一个新板块出来
+const libInCard = await page.evaluate(() => {
+  const modeOf = el => { const m = el && el.closest && el.closest('.mode'); return m ? m.dataset.mode : ''; };
+  return {
+    w: modeOf(document.getElementById('wrongLibBtn')),
+    f: modeOf(document.getElementById('favLibBtn')),
+    stray: document.querySelectorAll('.lib-btns').length
+  };
+});
+chk(libInCard.w === 'wrong' && libInCard.f === 'fav' && libInCard.stray === 0,
+  'S6 「逐题回顾」入口就在错题/收藏练习卡片里（不再单独一栏）', JSON.stringify(libInCard));
+
+const modeBeforeLib = await page.evaluate(() => {
+  const a = document.querySelector('.mode.active');
+  return a ? a.dataset.mode : '';
+});
 await page.click('#wrongLibBtn');
 await page.waitForTimeout(250);
 let lib = await page.evaluate(() => {
@@ -193,6 +209,13 @@ let lib = await page.evaluate(() => {
   return { text: el ? el.textContent.replace(/\s+/g, ' ').trim() : '', title: document.getElementById('libTitle').textContent.trim() };
 });
 chk(/第 2 \/ 3 题/.test(lib.text), 'S6 错题集回顾弹窗顶部提示该模式的进度', JSON.stringify(lib));
+const modeAfterLib = await page.evaluate(() => {
+  const a = document.querySelector('.mode.active');
+  return a ? a.dataset.mode : '';
+});
+chk(modeAfterLib === modeBeforeLib,
+  'S6 点回顾入口不会顺带切换练习模式（卡片内按钮已阻止冒泡）',
+  modeBeforeLib + ' → ' + modeAfterLib);
 await page.click('#libClose');
 await page.waitForTimeout(200);
 

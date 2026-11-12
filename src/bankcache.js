@@ -12,6 +12,8 @@
  * 数据量不小（一个题库的题目可能几百 KB），所以必须设个上限，别让它无限长大。
  */
 
+import { delCachedQuestions } from './idbcache.js';
+
 const QUESTION_TTL = 5 * 60 * 1000;     // 5 分钟
 const MAX_BANKS = 4;                    // 最多缓存几个题库的题目（一个题库动辄几百 KB）
 
@@ -49,6 +51,8 @@ export function putQuestions(id, questions) {
 export function dropQuestions(id) {
   if (!id) return;
   qCache.delete(String(id));
+  // 本机持久缓存（v2.32）同样要清：题目已经变了，留着只会让人打开旧题
+  delCachedQuestions(id).catch(() => {});
 }
 
 /** 全清（换账号、退出登录时用 —— 别把上一个人的题目留在内存里） */

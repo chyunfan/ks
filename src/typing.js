@@ -1,4 +1,26 @@
-import { WUBI } from './wubi.js';
+import { ensureWubi } from './assets.js';
+
+// ============================================================
+// 五笔码表（27516 字，209 KB）· 按需加载（v2.32）
+// ------------------------------------------------------------
+// 它只在「打字练习」这一屏用得上，却是首屏里最大的一块之一。
+// 现在进了打字屏才加载（同一会话内只下一次），打不开时降级成「只跟打、不显示编码」，
+// 不会因为一个提示功能把打字练习整个卡住。
+// ============================================================
+let WUBI = null;
+
+async function ensureCodes() {
+  if (WUBI) return WUBI;
+  try {
+    const w = await ensureWubi();
+    WUBI = w || {};
+  } catch (e) {
+    WUBI = {};          // 加载失败：仍然能打，只是没有编码提示
+  }
+  return WUBI;
+}
+
+const codeOf = ch => (ch && WUBI ? (WUBI[ch] || null) : null);
 import { supabase, getUserId } from './supabase.js';
 import { getUsername } from './auth.js';
 
@@ -68,7 +90,7 @@ const linesEl = () => $('tpLines');
 /* ============================================================
    ｜ 载入与布局
    ============================================================ */
-export function startTyping(hzk) {
+export async function startTyping(hzk) {
   if (!inited) initTyping({});
   curHz = { id: hzk.id, name: hzk.name, perLine: parseInt(hzk.perLine, 10) || 35 };
   curHzText = String(hzk.text || '');
@@ -78,9 +100,12 @@ export function startTyping(hzk) {
   if (opts.indexOf(curHz.perLine) < 0) { opts.push(curHz.perLine); opts.sort((a, b) => a - b); }
   $('tpPerLine').innerHTML = opts.map(n => '<option value="' + n + '">' + n + '</option>').join('');
   $('tpPerLine').value = String(curHz.perLine);
+  // 码表是首次进打字屏才下的（209 KB），先出字面再补提示，别让整屏等它
   loadText(curHzText, curHz.perLine);
   // 刚切到本屏时容器宽度可能还没量到，下一帧按真实宽度重排一次
   requestAnimationFrame(() => { layout(); render(); });
+  await ensureCodes();
+  updateHint();
 }
 
 function loadText(text, perLine) {
@@ -205,10 +230,10 @@ function applyHint() {
 function updateHint() {
   const L = lines[lineIdx];
   const ch = L && L.chars[charIdx];
-  const code = ch ? WUBI[ch] : null;
+  const code = codeOf(ch);
   $('tpHintChar').textContent = ch || '';
-  $('tpHintCode').textContent = ch ? (code || '—') : '—';
-  $('tpHintAlt').textContent = (ch && !code) ? '(无编码)' : '';
+  $('tpHintCode').textContent = ch ? (code || (WUBI ? '—' : '加载中…')) : '—';
+  $('tpHintAlt').textContent = (ch && WUBI && !code) ? '(无编码)' : '';
 }
 
 /* ============================================================

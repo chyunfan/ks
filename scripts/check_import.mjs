@@ -1,6 +1,9 @@
 // 用真实模板跑一遍解析，验证导入不再被「多选全选」阻断
 import { readFileSync } from 'node:fs';
+import * as XLSX from 'xlsx';
 import { parseWorkbook } from '../src/import.js';
+// v2.32：import.js 不再自带 xlsx（主包要瘦身），Excel 组件由调用方传进来。
+// 浏览器里传的是按需加载的 window.XLSX，Node 这里直接用 node_modules 的。
 
 const file = process.argv[2];
 if (!file) { console.error('用法：node check_import.mjs <xlsx路径>'); process.exit(2); }
@@ -8,7 +11,7 @@ if (!file) { console.error('用法：node check_import.mjs <xlsx路径>'); proce
 const buf = readFileSync(file);
 const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
 const t0 = Date.now();
-const res = parseWorkbook(ab);
+const res = parseWorkbook(ab, XLSX);
 
 console.log('解析耗时:', Date.now() - t0, 'ms');
 console.log('ok        :', res.ok);

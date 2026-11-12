@@ -81,3 +81,36 @@ try {
 } catch (e) {
   console.log('[inline] 跳过清理 dist/assets（不影响使用）');
 }
+
+// 4) 单文件版（npm run build:single）：把按需加载件也塞进 HTML（v2.32）
+// ------------------------------------------------------------------
+// 常规产物是 index.html + lib/xlsx.min.js + lib/wubi.js（按需加载，首屏轻）。
+// 但内网离线分发时，用户要的是「拷一个 HTML 就能用」——
+// 这个模式下把两个大件内联成 <script type="text/plain" id="lib-xxx">，
+// assets.js 检测到这个标签就直接 eval，一个请求都不发。
+if (process.argv.includes('--inline-lib')) {
+  const libDir = path.join(dist, 'lib');
+  let n = 0;
+  let tags = '';
+  for (const [name, file] of [['xlsx', 'xlsx.min.js'], ['wubi', 'wubi.js']]) {
+    const p = path.join(libDir, file);
+    if (!fs.existsSync(p)) {
+      console.error('[inline] ✗ 单文件模式缺少 ' + p + '，请先 npm run assets');
+      process.exit(1);
+    }
+    const code = fs.readFileSync(p, 'utf8').replace(/<\/script>/gi, '<\\/script>');
+    tags += `<script type="text/plain" id="lib-${name}">\n${code}\n</script>\n`;
+    n++;
+  }
+  // 插入点必须取**最后一个** </body>：xlsx 源码里自己就带着 '</body>' 字面量，
+  // 用 replace('</body>', …) 会插进它的字符串里，把组件代码切断（第一次做这个内联就踩了：
+  // 产物里 xlsx 只剩 175 KB，浏览器 eval 报 "missing ) after argument list"）。
+  const at = html.lastIndexOf('</body>');
+  html = at >= 0
+    ? html.slice(0, at) + tags + '</body>' + html.slice(at + '</body>'.length)
+    : html + tags;
+  fs.writeFileSync(indexPath, html, 'utf8');
+  try { fs.rmSync(libDir, { recursive: true, force: true }); } catch (e) { /* 忽略 */ }
+  const kb2 = (Buffer.byteLength(html) / 1024).toFixed(1);
+  console.log(`[inline] 单文件模式：内联按需件 ${n} 个 → dist/index.html (${kb2} KB)`);
+}

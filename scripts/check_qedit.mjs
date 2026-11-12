@@ -663,7 +663,8 @@ chk(/编辑题目/.test(ds), 'K1 产物里「编辑题目」入口文案在内�
 chk(/\.qe-opt\{/.test(ds) && /\.qe-del\{/.test(ds), 'K1 产物里带编辑器样式（选项行 / 删除按钮）', '');
 chk(!/__qedit/.test(ds) && !/__banks/.test(ds),
   'K2 生产包里没有验收钩子（DEV 分支已被剔除，外部无从调用编辑器内部函数）', '');
-chk((ds.match(/<script[^>]+src=|<link[^>]+href=/g) || []).length === 0, 'K2 产物 0 外链（单文件可直接部署）', '');
+chk((ds.match(/<script[^>]+src=|<link[^>]+href=/g) || []).length === 0,
+  'K2 产物 0 外链（首屏仍是单文件；导入导出/打字的大件按需加载，见 check_lib）', '');
 
 /* ================= J. 运行状态 ================= */
 console.log('\n【J. 运行状态】');

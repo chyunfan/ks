@@ -16,6 +16,11 @@
  *   F. 传输体积：列表响应比旧实现小若干倍（用 300 题的桩数据量化）
  *   G. 源码守卫：perf.sql 的触发器、banks.js 的列清单
  *
+ * v2.32 又往前推了一步（用户反馈「题库大的时候打开特别慢」）：
+ *   · 首屏不再等网络：先画题库列表，题目后台下（E 段）
+ *   · 题目落 IndexedDB，重开页面秒进；题库改了才重下（H 段）
+ *   · 手点正在后台下那份不会重复下载（I 段）
+ *
  * 用法：node scripts/check_speed.mjs
  */
 import { spawn } from 'node:child_process';
@@ -71,8 +76,8 @@ const QS_WASH = BIG(300);     // 「大题库」：300 题
 const QS_SMALL = BIG(120);
 
 const BANKS = [
-  { id: 'b-wash', user_id: MY_ID, owner_name: '常云凡', name: '2026反洗钱资格考试', questions: QS_WASH, question_count: 300, case_count: 6, created_at: '2026-09-27T02:00:00Z', visibility: 'public', allow_depts: [], allow_roles: [] },
-  { id: 'b-credit', user_id: OTHER_ID, owner_name: '张三', name: '信贷业务题库', questions: QS_SMALL, question_count: 120, case_count: 0, created_at: '2026-09-26T02:00:00Z', visibility: 'public', allow_depts: [], allow_roles: [] }
+  { id: 'b-wash', user_id: MY_ID, owner_name: '常云凡', name: '2026反洗钱资格考试', questions: QS_WASH, question_count: 300, case_count: 6, created_at: '2026-09-27T02:00:00Z', updated_at: '2026-09-27T02:00:00Z', visibility: 'public', allow_depts: [], allow_roles: [] },
+  { id: 'b-credit', user_id: OTHER_ID, owner_name: '张三', name: '信贷业务题库', questions: QS_SMALL, question_count: 120, case_count: 0, created_at: '2026-09-26T02:00:00Z', updated_at: '2026-09-26T02:00:00Z', visibility: 'public', allow_depts: [], allow_roles: [] }
 ];
 // 旧实现（含 questions）与优化后（不含）的响应体字节数，用于量化传输体积
 const LEGACY_BYTES = Buffer.byteLength(JSON.stringify(BANKS));
@@ -172,7 +177,8 @@ async function makePage(browser, opt = {}) {
             details: null, hint: null
           }, 400);
         }
-        if (opt.bankDelay) await new Promise(r => setTimeout(r, opt.bankDelay));
+        const d = (opt.bankDelay || 0) + (select.includes('questions') ? (opt.qDelay || 0) : 0);
+        if (d) await new Promise(r => setTimeout(r, d));
         const body = JSON.stringify(payload);
         log.push({ t0, t1: Date.now(), select, bytes: Buffer.byteLength(body), rows: Array.isArray(payload) ? payload.length : 1 });
         return route.fulfill({ status: 200, headers: Object.assign({ 'content-type': 'application/json' }, CORS), body });
@@ -333,26 +339,39 @@ console.log('\n【D】题目缓存');
 }
 
 /* ============================================================
- * E. 启动并行：/api/me 与题库请求重叠
+ * E. 启动不再被网络挡住（v2.32）
+ * ------------------------------------------------------------
+ * 老流程：白屏 → 等 /api/me → 等整库题目 → 才出第一个像素。
+ * 新流程：先把题库列表拿出来（标题、题数都在列表元数据里），题目在后台下。
+ * 所以这里的判据是「**首屏内容出现的时间远早于题库下载完成**」。
  * ============================================================ */
-console.log('\n【E】首屏并行');
+console.log('\n【E】首屏不再等网络');
 {
   const { page, log, waits } = await makePage(browser, {
-    savedBank: 'b-wash', meDelay: 400, bankDelay: 50
+    savedBank: 'b-wash', meDelay: 400, bankDelay: 50, qDelay: 900
   });
   const t0 = Date.now();
   await page.goto(URL_APP);
+  // ① 首屏先有内容：列表屏可见且已有文字（标题或"正在加载"），完全不必等整库题目
+  await page.waitForFunction(() => {
+    const app = document.getElementById('app');
+    const banks = document.getElementById('banks');
+    const box = document.getElementById('bankList');
+    return app && !app.classList.contains('hide') && banks && !banks.classList.contains('hide')
+      && box && box.textContent.trim().length > 0;
+  }, null, { timeout: 15000 });
+  const firstPaint = Date.now() - t0;
+  // ② 本机没有缓存：留在列表页，题目下完自动进首页
   await page.waitForFunction(() => {
     const h = document.getElementById('home');
     return h && !h.classList.contains('hide');
   }, null, { timeout: 15000 });
   const elapsed = Date.now() - t0;
-  // 身份请求有 400ms 延迟，要等它落地再断言（否则 t1 还是 null，重叠判断不成立）
   await page.waitForTimeout(600);
 
   const meW = waits[0];
   const bankQ = log.find(x => x.select && x.select.includes('questions'));
-  chk(!!meW && !!bankQ, 'E1 两个请求都发生了', JSON.stringify({ me: !!meW, bank: !!bankQ }));
+  chk(!!meW && !!bankQ, 'E1 身份与题库两个请求都发生了', JSON.stringify({ me: !!meW, bank: !!bankQ }));
   if (meW && bankQ && meW.t1) {
     const overlap = meW.t0 < bankQ.t1 && bankQ.t0 < meW.t1;
     chk(overlap, 'E2 身份请求与题库请求时间重叠（真并行，不是排队）',
@@ -360,11 +379,14 @@ console.log('\n【E】首屏并行');
   } else {
     chk(false, 'E2 身份请求与题库请求时间重叠（真并行，不是排队）', '时间戳缺失');
   }
-  // 串行的话至少 400+50=450ms 起（还没算渲染），并行应明显低于此
-  chk(elapsed < 900, 'E3 首屏总耗时未被串行拉长', elapsed + ' ms');
+  // 题库人为延迟 900ms：首屏若还能在 400ms 内出内容，说明根本没等它
+  chk(firstPaint < 500, 'E3 首屏内容早于整库题目到达（不再白屏等网络）', firstPaint + ' ms');
+  chk(bankQ && firstPaint < (bankQ.t1 - t0),
+    'E3 首屏出现在题目响应结束之前', `首屏 ${firstPaint}ms / 题目完成 ${bankQ ? bankQ.t1 - t0 : '?'}ms`);
+  chk(elapsed >= 900, 'E4 题目下完之后才自动进首页（进首页仍需要题目）', elapsed + ' ms');
 
   const homeName = await page.evaluate(() => document.getElementById('topBankName').textContent.trim());
-  chk(homeName === '2026反洗钱资格考试', 'E4 并行后顶栏名字正确（身份晚到不影响题库加载）', homeName);
+  chk(homeName === '2026反洗钱资格考试', 'E5 自动进首页后顶栏名字正确', homeName);
   // 首页四张模式卡 + 每张卡里的计数框 / 续做横幅，都是 refreshHomeUI() 画的
   const counts = await page.evaluate(() => ({
     modes: document.querySelectorAll('#home .mode').length,
@@ -372,33 +394,40 @@ console.log('\n【E】首屏并行');
     resumes: document.querySelectorAll('#home .rs').length
   }));
   chk(counts.modes === 4 && counts.countBoxes === 3 && counts.resumes === 4,
-    'E5 首页卡片正常渲染（错题/收藏/进度没因并行而错位）', JSON.stringify(counts));
+    'E6 首页卡片正常渲染（错题/收藏/进度没因并行而错位）', JSON.stringify(counts));
   await page.close();
 }
 
 /* ============================================================
- * G. 加载反馈：慢的时候不能是纯白，快的时候不能闪
+ * G. 加载反馈：慢的时候不白屏，快的时候不闪
  * ============================================================ */
-console.log('\n【G】加载遮罩');
+console.log('\n【G】加载反馈');
 {
-  const { page } = await makePage(browser, { savedBank: 'b-wash', meDelay: 600, bankDelay: 300 });
+  const { page } = await makePage(browser, { savedBank: 'b-wash', meDelay: 600, bankDelay: 300, qDelay: 1200 });
   await page.goto(URL_APP);
-  await page.waitForTimeout(400);          // 此刻仍在加载（me 600ms / bank 300ms）
+  await page.waitForFunction(() => {
+    const app = document.getElementById('app');
+    const box = document.getElementById('bankList');
+    return app && !app.classList.contains('hide') && box && box.textContent.trim().length > 0;
+  }, null, { timeout: 15000 });
   const mid = await page.evaluate(() => {
     const m = document.getElementById('bootMask');
     return {
-      exists: !!m,
-      off: m ? m.classList.contains('off') : null,
-      text: (document.getElementById('bootText') || {}).textContent || '',
-      opacity: m ? Number(getComputedStyle(m).opacity) : -1
+      appVisible: !document.getElementById('app').classList.contains('hide'),
+      listText: document.getElementById('bankList').textContent.trim().slice(0, 40),
+      maskOff: m ? m.classList.contains('off') : null,
+      maskOpacity: m ? Number(getComputedStyle(m).opacity) : -1
     };
   });
-  chk(mid.exists && mid.off === false, 'G1 加载期间显示遮罩（不再是纯白页面）', JSON.stringify(mid));
-  chk(/题库/.test(mid.text), 'G2 文案说清在加载什么', mid.text);
-  chk(mid.opacity > 0.5, 'G3 遮罩真的可见（不是只加了类却透明）', 'opacity=' + mid.opacity);
+  chk(mid.appVisible && mid.listText.length > 0,
+    'G1 题目还在下载时首屏已有内容（不再是纯白页面）', JSON.stringify(mid));
+  chk(/题库/.test(mid.listText), 'G2 首屏那句话说明在做什么', mid.listText);
+  chk(mid.maskOff === true || mid.maskOpacity < 0.5,
+    'G3 界面已出来，遮罩不再挡着（挡住等于白屏）', JSON.stringify(mid));
 
+  await page.waitForFunction(() => !document.getElementById('home').classList.contains('hide'), null, { timeout: 15000 });
   await page.waitForFunction(() => document.getElementById('bootMask').classList.contains('off'), null, { timeout: 15000 });
-  chk(true, 'G4 加载完成后遮罩收起');
+  chk(true, 'G4 进首页后遮罩收起');
   const pe = await page.evaluate(() => getComputedStyle(document.getElementById('bootMask')).pointerEvents);
   chk(pe === 'none', 'G5 收起后不再拦截点击', pe);
 
@@ -406,9 +435,9 @@ console.log('\n【G】加载遮罩');
   await page.evaluate(() => document.getElementById('toBanks').click());
   await page.waitForTimeout(500);
   const rows = await listRows(page);
-  chk(rows.length > 0, 'G6 遮罩收起后页面可正常操作', rows.length + ' 行');
+  chk(rows.length > 0, 'G6 收起后页面可正常操作', rows.length + ' 行');
 
-  // 延迟淡入：加载快时不应该出现（否则会闪一下，比白屏更难受）
+  // 慢加载时（下题目那段）仍要有遮罩兜底，且延迟 150ms 淡入（快就不闪）
   const css = fs.readFileSync(path.join(ROOT, 'src/styles.css'), 'utf8');
   chk(/\.boot-mask\{[^}]*animation:bootIn[^}]*\.15s/.test(css), 'G7 遮罩延迟 150ms 才淡入（快加载不出现、不闪）');
   await page.close();
@@ -421,8 +450,8 @@ console.log('\n【F】源码与 SQL 守卫');
 {
   const banksSrc = fs.readFileSync(path.join(ROOT, 'src/banks.js'), 'utf8');
   const perfSql = fs.readFileSync(path.join(ROOT, 'supabase/perf.sql'), 'utf8');
-  chk(/const BANK_COLS = 'id,name,case_count,question_count,created_at,user_id,owner_name,visibility,allow_depts,allow_roles'/.test(banksSrc),
-    'F1 新列清单固定（不含 questions）');
+  chk(/const BANK_COLS = 'id,name,case_count,question_count,created_at,updated_at,user_id,owner_name,visibility,allow_depts,allow_roles'/.test(banksSrc),
+    'F1 新列清单固定（不含 questions，含 updated_at 版本号）');
   chk(/BANK_COLS_LEGACY[\s\S]{0,200}questions/.test(banksSrc), 'F2 保留含 questions 的旧清单用于降级');
   chk(/isMissingColumn/.test(banksSrc) && /42703/.test(banksSrc), 'F3 有列缺失的识别逻辑');
   chk(/invalidateBankList/.test(banksSrc), 'F4 改名/删库后有缓存失效入口');
@@ -432,6 +461,133 @@ console.log('\n【F】源码与 SQL 守卫');
 
   const qeditSrc = fs.readFileSync(path.join(ROOT, 'src/qedit.js'), 'utf8');
   chk(/dropQuestions\(st\.bank\.id\)/.test(qeditSrc), 'F8 编辑题目保存后清缓存');
+
+  // ---- v2.32：大件按需加载 ----
+  const importSrc = fs.readFileSync(path.join(ROOT, 'src/import.js'), 'utf8');
+  const typingSrc = fs.readFileSync(path.join(ROOT, 'src/typing.js'), 'utf8');
+  const assetsSrc = fs.readFileSync(path.join(ROOT, 'src/assets.js'), 'utf8');
+  chk(!/from 'xlsx'/.test(banksSrc) && !/from 'xlsx'/.test(importSrc),
+    'F9 主包不再静态引入 Excel 组件（改成用到才加载）');
+  chk(!/from '\.\/wubi\.js'/.test(typingSrc), 'F10 主包不再静态引入五笔码表');
+  chk(/ensureXLSX/.test(banksSrc) && /ensureWubi/.test(typingSrc),
+    'F11 两处都改成按需加载（ensureXLSX / ensureWubi）');
+  chk(fs.existsSync(path.join(ROOT, 'public/lib/xlsx.min.js')) && fs.existsSync(path.join(ROOT, 'public/lib/wubi.js')),
+    'F12 两个按需加载件已生成到 public/lib');
+  chk(/libUrls/.test(assetsSrc) && /runtimePrefix/.test(assetsSrc),
+    'F13 按需件走运行时前缀候选（部署在 /ks 子路径也不会 404）');
+  chk(/getCachedQuestions/.test(banksSrc) && /putCachedQuestions/.test(banksSrc) && /revalidateQuestions/.test(banksSrc),
+    'F14 题目有本机缓存 + 版本校验');
+  chk(/prefetchBanks/.test(banksSrc) && /abortPrefetch/.test(banksSrc),
+    'F15 有后台预取，且用户点题库时能让位（abort）');
+}
+
+/* ============================================================
+ * H. 本机缓存（IndexedDB）· v2.32
+ * ------------------------------------------------------------
+ * 用户的原话：「先展示出题库标题，后台默认从前往后加载，+本地缓存，
+ * 若用户点击了某个题库的练习，则优先加载该题库，题库有更新需更新缓存」。
+ * 这一段钉住的就是这几条：缓存真的落了、重开不再下、题库改了才换。
+ * ============================================================ */
+console.log('\n【H】本机缓存与版本更新');
+{
+  const { page, log } = await makePage(browser, { savedBank: 'b-wash' });
+  const homeReady = () => page.waitForFunction(() => {
+    const h = document.getElementById('home');
+    return h && !h.classList.contains('hide');
+  }, null, { timeout: 20000 });
+  const qReqs = () => log.filter(x => x.select && x.select.includes('questions')).length;
+
+  await page.goto(URL_APP);
+  await homeReady();
+
+  // H1 题目落进本机缓存，并带着版本号（据此判断题库有没有更新）
+  const inIdb = await page.evaluate(() => new Promise(resolve => {
+    const r = indexedDB.open('ce_cache', 1);
+    r.onerror = () => resolve(null);
+    r.onsuccess = () => {
+      const db = r.result;
+      try {
+        const req = db.transaction('kv', 'readonly').objectStore('kv').get('q:b-wash');
+        req.onerror = () => resolve(null);
+        req.onsuccess = () => {
+          const v = req.result;
+          resolve(v ? { n: (v.qs || []).length, ver: v.updatedAt || '' } : null);
+        };
+      } catch (e) { resolve(null); }
+    };
+  }));
+  chk(!!inIdb && inIdb.n === 300 && !!inIdb.ver, 'H1 题目落进本机缓存（300 题 + 版本号）', JSON.stringify(inIdb));
+
+  // H2 重新打开页面：直接读本机，不再重下整库题目
+  const before = qReqs();
+  await page.reload();
+  await homeReady();
+  await page.waitForTimeout(400);
+  chk(qReqs() === before, 'H2 重开页面不再下载整库题目（从本机读到）', before + ' → ' + qReqs());
+
+  // H3 题库没变时不做无谓重下（版本一致）
+  await page.reload();
+  await homeReady();
+  await page.waitForTimeout(600);
+  chk(qReqs() === before, 'H3 版本没变就不重下（校验只发一个几百字节的请求）', before + ' → ' + qReqs());
+
+  // H4 题库更新（updated_at 变了）→ 后台自动换缓存
+  const qsBackup = BANKS[0].questions;
+  const verBackup = BANKS[0].updated_at;
+  BANKS[0].updated_at = '2026-11-12T03:00:00Z';
+  BANKS[0].questions = QS_SMALL;            // 内容也换掉，验证真的换了题
+  await page.reload();
+  await homeReady();
+  const replaced = await page.waitForFunction(
+    () => window.__exam && window.__exam.questions().length === 120,
+    null, { timeout: 20000 }
+  ).then(() => true).catch(() => false);
+  chk(replaced, 'H4 题库有更新时自动换缓存（版本变了才重下）',
+    '内存里 ' + (await page.evaluate(() => (window.__exam ? window.__exam.questions().length : -1))) + ' 题');
+  chk(qReqs() > before, 'H5 换缓存真的重新下载了一次', before + ' → ' + qReqs());
+
+  // 还原桩数据，别把后面的用例带歪（历史上踩过这个坑）
+  BANKS[0].questions = qsBackup;
+  BANKS[0].updated_at = verBackup;
+
+  // H6 退出登录清空本机缓存
+  await page.evaluate(() => document.getElementById('logoutBtn').click());
+  await page.waitForTimeout(600);
+  const afterLogout = await page.evaluate(() => new Promise(resolve => {
+    const r = indexedDB.open('ce_cache', 1);
+    r.onerror = () => resolve(null);
+    r.onsuccess = () => {
+      const db = r.result;
+      try {
+        const req = db.transaction('kv', 'readonly').objectStore('kv').count();
+        req.onerror = () => resolve(null);
+        req.onsuccess = () => resolve(req.result);
+      } catch (e) { resolve(null); }
+    };
+  }));
+  chk(afterLogout === 0, 'H6 退出登录清空本机缓存（不把上一个人的题留给下一个人）', String(afterLogout));
+  await page.close();
+}
+
+/* ============================================================
+ * I. 手点「正在后台下载」的那份题库，不能重复下载（v2.32）
+ * ============================================================ */
+console.log('\n【I】后台加载与用户点击不打架');
+{
+  const { page, log } = await makePage(browser, { savedBank: 'b-wash', qDelay: 900 });
+  await page.goto(URL_APP);
+  await page.waitForSelector('#bankList .bank-row .act-open', { timeout: 15000 });
+  // 用户等不及后台那份，直接点它
+  await page.click('#bankList .bank-row .act-open');
+  await page.waitForFunction(() => !document.getElementById('home').classList.contains('hide'), null, { timeout: 20000 });
+  await page.waitForTimeout(500);
+  const qs = log.filter(x => x.select && x.select.includes('questions')).length;
+  chk(qs === 1, 'I1 同一题库的在途请求合并成一次（不重复下整库）', qs + ' 次');
+  const name = await page.evaluate(() => document.getElementById('topBankName').textContent.trim());
+  chk(name === '2026反洗钱资格考试', 'I2 点完之后进的是这份题库（不会被后台自动跳转抢走）', name);
+  const onHome = await page.evaluate(() => !document.getElementById('home').classList.contains('hide'));
+  chk(onHome, 'I3 停在首页（自动跳转没有把用户又拽回去）', String(onHome));
+  await page.close();
 }
 
 await browser.close();

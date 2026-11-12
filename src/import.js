@@ -1,5 +1,3 @@
-import * as XLSX from 'xlsx';
-
 // 期望表头（按中文名定位；大小写/空格不敏感）
 const HEADERS = {
   type: ['题型'],
@@ -49,12 +47,12 @@ function parseJudge(raw) {
  * warnings —— 提示性问题，不阻断导入（如多选全选）
  * @returns {{ok:boolean, questions:Array, caseCount:number, errors:Array, warnings:Array, rowCount:number}}
  */
-export function parseWorkbook(arrayBuffer) {
+export function parseWorkbook(arrayBuffer, X) {
   const errors = [];
   const warnings = [];
-  const wb = XLSX.read(arrayBuffer, { type: 'array' });
+  const wb = X.read(arrayBuffer, { type: 'array' });
   const ws = wb.Sheets[wb.SheetNames[0]];
-  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', raw: false });
+  const rows = X.utils.sheet_to_json(ws, { header: 1, defval: '', raw: false });
   if (!rows.length) return { ok: false, questions: [], caseCount: 0, errors: ['文件为空'], warnings: [], rowCount: 0 };
 
   const header = rows[0].map(c => norm(c));
@@ -181,22 +179,22 @@ export function parseWorkbook(arrayBuffer) {
 }
 
 // 生成可下载的空模板（含表头 + 2 行示例）
-export function buildTemplateWorkbook() {
+export function buildTemplateWorkbook(X) {
   const aoa = [
     ['题型', '案例材料', '题干', 'A', 'B', 'C', 'D', 'E', 'F', '答案', '解析'],
     ['单选', '', '中国人民银行的主要职责是？', '制定和执行货币政策', '发行人民币', '监管证券业', '审批商业银行设立', '', '', 'A', '货币政策职能'],
     ['案例', '某公司申请流动资金贷款用于日常经营周转。', '该贷款应归类为？', '流动资金贷款', '固定资产贷款', '项目贷款', '', '', '', 'A', ''],
     ['案例', '某公司申请流动资金贷款用于日常经营周转。', '贷款期限一般不超过？', '1年', '3年', '5年', '', '', '', 'B', '']
   ];
-  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  const ws = X.utils.aoa_to_sheet(aoa);
   ws['!cols'] = [{ wch: 8 }, { wch: 30 }, { wch: 40 }, { wch: 18 }, { wch: 18 }, { wch: 18 }, { wch: 14 }, { wch: 10 }, { wch: 10 }, { wch: 8 }, { wch: 20 }];
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, '题库模板');
+  const wb = X.utils.book_new();
+  X.utils.book_append_sheet(wb, ws, '题库模板');
   return wb;
 }
 
 // 将题库导出为 xlsx（便于备份）
-export function buildBankWorkbook(questions) {
+export function buildBankWorkbook(questions, X) {
   const aoa = [['题型', '案例材料', '题干', 'A', 'B', 'C', 'D', 'E', 'F', '答案', '解析']];
   const typeName = { single: '单选', multiple: '多选', judge: '判断' };
   for (const q of questions) {
@@ -207,8 +205,8 @@ export function buildBankWorkbook(questions) {
     const answer = (q.answerKeys || []).join('');
     aoa.push([typeLabel, material, q.stem, opt[0], opt[1], opt[2], opt[3], opt[4], opt[5], answer, q.analysis || '']);
   }
-  const ws = XLSX.utils.aoa_to_sheet(aoa);
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, '题库');
+  const ws = X.utils.aoa_to_sheet(aoa);
+  const wb = X.utils.book_new();
+  X.utils.book_append_sheet(wb, ws, '题库');
   return wb;
 }

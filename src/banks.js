@@ -1,15 +1,18 @@
-import * as XLSX from 'xlsx';
 import { supabase, getUserId } from './supabase.js';
 import { parseWorkbook, buildTemplateWorkbook, buildBankWorkbook } from './import.js';
 import { getUsername } from './auth.js';
 import { isAdmin, knownTags, ensureUsers } from './admin.js';
 import { openQEdit } from './qedit.js';
 import { getQuestions, putQuestions, dropQuestions } from './bankcache.js';
+import { ensureXLSX } from './assets.js';
+import { getListSnapshot, putListSnapshot, getCachedQuestions, putCachedQuestions, delCachedQuestions } from './idbcache.js';
 import { showBoot, hideBoot } from './bootmask.js';
 
 let pendingImport = null;   // { questions, caseCount }
 let onOpenBank = null;
+let onRefreshQuestions = null;   // 后台校验发现题目变了 → 通知 main.js 重画首页
 let onOpenTyping = null;    // 下拉里选中「打字练习」后跳去哪（由 main.js 注入）
+
 
 // 正在设置「可见范围」的题库 + 当前勾选的部门/角色
 let scopeBank = null;
@@ -19,10 +22,15 @@ let scopeRoles = [];
 export function initBanks(cb) {
   onOpenBank = cb.onOpenBank;
   onOpenTyping = cb.onOpenTyping;
+  onRefreshQuestions = cb.onRefreshQuestions || null;
 
   document.getElementById('importBtn').addEventListener('click', () => document.getElementById('fileInput').click());
-  document.getElementById('tplBtn').addEventListener('click', () => {
-    XLSX.writeFile(buildTemplateWorkbook(), '题库模板.xlsx');
+  // Excel 组件是**按需加载**的（v2.32）：第一次点模板/导入/导出时下 427 KB，之后走缓存。
+  document.getElementById('tplBtn').addEventListener('click', async () => {
+    try {
+      const X = await ensureXLSX();
+      X.writeFile(buildTemplateWorkbook(X), '题库模板.xlsx');
+    } catch (e) { alert('模板下载失败：' + e.message); }
   });
   document.getElementById('fileInput').addEventListener('change', onFile);
   document.getElementById('importClose').addEventListener('click', closeImport);
@@ -45,7 +53,8 @@ async function onFile(e) {
   if (!file) return;
   try {
     const buf = await file.arrayBuffer();
-    const res = parseWorkbook(buf);
+    const X = await ensureXLSX();          // 首次导入时才加载 Excel 组件
+    const res = parseWorkbook(buf, X);
     if (!res.ok) {
       pendingImport = null;
       document.getElementById('importPreview').innerHTML =
@@ -116,8 +125,8 @@ async function saveImport() {
 //          自动退回旧查询 —— 慢，但页面不会白屏。**只退一次**：把探测结果记下来，
 //          否则每次进列表都先发一个注定失败的请求，反而更慢。
 // ============================================================
-const BANK_COLS = 'id,name,case_count,question_count,created_at,user_id,owner_name,visibility,allow_depts,allow_roles';
-const BANK_COLS_LEGACY = 'id,name,case_count,created_at,questions,user_id,owner_name,visibility,allow_depts,allow_roles';
+const BANK_COLS = 'id,name,case_count,question_count,created_at,updated_at,user_id,owner_name,visibility,allow_depts,allow_roles';
+const BANK_COLS_LEGACY = 'id,name,case_count,created_at,updated_at,questions,user_id,owner_name,visibility,allow_depts,allow_roles';
 
 let bankListCache = null;     // 最近一次成功的列表
 let bankListCacheAt = 0;
@@ -153,6 +162,7 @@ function mapBankRow(b, me) {
       ? b.question_count
       : (Array.isArray(b.questions) ? b.questions.length : 0),
     createdAt: b.created_at,
+    updatedAt: b.updated_at || '',        // 题库版本号：判断本机缓存是否过期（v2.32）
     userId: b.user_id,
     ownerName: b.owner_name || '',
     visibility: b.visibility || 'public',
@@ -175,7 +185,23 @@ async function listBanks(opts) {
   const rows = (data || []).map(b => mapBankRow(b, me));
   bankListCache = rows;
   bankListCacheAt = Date.now();
+  // 落一份到本机（IndexedDB）：下次打开页面先有内容可画，不用等网络（v2.32）
+  putListSnapshot(me, rows).catch(() => {});
   return rows;
+}
+
+/**
+ * 启动时从本机捞上一次的题库列表（v2.32）。
+ * 有就直接当缓存用 —— 页面立刻能画出题库标题；超过 30 秒的会被 renderBanks 顺手后台刷新。
+ * @returns {Promise<boolean>} 是否拿到了本机快照
+ */
+export async function hydrateBankList() {
+  if (bankListCache) return true;
+  const snap = await getListSnapshot(getUserId());
+  if (!snap || !snap.rows.length) return false;
+  bankListCache = snap.rows;
+  bankListCacheAt = snap.at || 0;
+  return true;
 }
 
 /** 让列表缓存失效（改名 / 删库 / 改可见范围 / 导入之后必须调，否则会看到旧名字） */
@@ -270,6 +296,9 @@ function paintBanks(banks) {
     on('.act-scope', () => openScope(b));
     on('.act-del', () => deleteBank(b));
   });
+
+  // 列表一出来就开始后台预热（从前往后，用户点谁谁插队）—— 让「点进去」这件事变成立刻的
+  prefetchBanks(banks);
 }
 
 /**
@@ -294,28 +323,175 @@ export async function renderBanks(opts) {
   paintBanks(banks);
 }
 
+/* ============================================================
+   取题目：内存 → 本机 IndexedDB → 网络（v2.32）
+   ------------------------------------------------------------
+   v2.29 只加了内存缓存，关页就没了：于是每次打开页面都要重下一遍整库
+   —— 大题库几百 KB 到几 MB，这条链路上实测 20 KB/s，就是十几到几十秒，
+   这就是「题库越大、打开越慢」的根。
+   v2.32 多一层 IndexedDB：第二次开页直接读本机（毫秒级），网络只用来
+   **校验题库有没有更新**（比 updated_at），真改了才重下。
+
+   版本号取自 exam_banks.updated_at（触发器维护，改题就会变），
+   本机那份记着当时的 updatedAt，不一致即视为「题库有更新」。
+   ============================================================ */
+
+/** 取题目时顺手记下的题库名（localStorage 里那份可能是旧名字） */
+const nameCache = new Map();
+
 /**
- * 取某个题库的题目（带缓存）。
- * 「从列表点练习」和「刷新页面恢复上次题库」会拉到同一份数据，
- * 5 分钟内复用，省掉一次几百 KB 的下载。任何改动题目的地方（编辑/导入/删库）
- * 都会调 dropQuestions 让缓存失效，不会读到旧题。
+ * 同一个题库「正在下载」的请求（v2.32）。
+ * 场景：启动时后台已经在为上次那份题库下载，用户等不及直接点了它 ——
+ * 没有这张表的话会再发一个一模一样的整库请求，在 20 KB/s 的链路上等于把时间翻倍。
+ * 有它就把两个等待合并成一次下载。
  */
-async function fetchBankQuestions(id) {
-  const cached = getQuestions(id);
-  if (cached) return cached;
-  const { data, error } = await supabase.from('exam_banks').select('questions').eq('id', id).single();
+const inflight = new Map();
+
+/** 本机那份缓存和列表给的版本对不对得上 */
+function sameVersion(cached, updatedAt) {
+  if (!cached) return false;
+  if (!updatedAt) return true;                    // 列表没给版本：当作可用
+  if (!cached.updatedAt) return false;
+  return String(cached.updatedAt) === String(updatedAt);
+}
+
+/**
+ * 从网络取整库题目，并写回两级缓存。
+ * @param {object} [opts] prefetch=true 时走后台预取（可被用户操作中止）
+ */
+function fetchFromNet(id, updatedAt, opts) {
+  const key = String(id);
+  const running = inflight.get(key);
+  if (running) return running;                 // 同一份正在下：共用这一次
+  const task = doFetchFromNet(id, updatedAt, opts)
+    .finally(() => { if (inflight.get(key) === task) inflight.delete(key); });
+  inflight.set(key, task);
+  return task;
+}
+
+async function doFetchFromNet(id, updatedAt, opts) {
+  const prefetch = !!(opts && opts.prefetch);
+  const ctrl = opts && opts.ctrl;
+  let q = supabase.from('exam_banks').select('questions,updated_at,question_count,name').eq('id', id).single();
+  if (prefetch && ctrl && typeof q.abortSignal === 'function') q = q.abortSignal(ctrl.signal);
+  const { data, error } = await q;
   if (error) throw new Error(error.message);
   const qs = Array.isArray(data && data.questions) ? data.questions : [];
+  if (data && data.name) nameCache.set(String(id), data.name);   // 顺手记住权威名字（顶栏要用）
   putQuestions(id, qs);
+  putCachedQuestions(id, {
+    updatedAt: (data && data.updated_at) || updatedAt || '',
+    count: typeof (data && data.question_count) === 'number' ? data.question_count : qs.length,
+    qs
+  }).catch(() => {});
   return qs;
+}
+
+/**
+ * 取题目（带两级缓存）。
+ * 「从列表点练习」和「刷新页面恢复上次题库」会拉到同一份数据，命中即复用；
+ * 任何改动题目的地方（编辑/导入/删库）都会 dropQuestions 让两级缓存一起失效。
+ */
+async function fetchBankQuestions(id, updatedAt) {
+  const mem = getQuestions(id);
+  if (mem) return mem;
+  const hit = await getCachedQuestions(id);
+  if (hit && Array.isArray(hit.qs) && hit.qs.length && sameVersion(hit, updatedAt)) {
+    putQuestions(id, hit.qs);
+    return hit.qs;
+  }
+  const running = inflight.get(String(id));
+  if (running) return running;   // 正在下（可能是后台预取）：直接等它，别再发一个
+  abortPrefetch();               // 用户要的是别的库：先把后台预取停下，别抢带宽
+  return fetchFromNet(id, updatedAt);
+}
+
+/**
+ * 先用本机缓存进页面，再后台确认题库有没有更新（v2.32）。
+ * 只比 updated_at / 题数，一个几百字节的请求；真的变了才重下并回调。
+ * 这样「题库有更新需更新缓存」不会变成「每次开页都重下」。
+ */
+async function revalidateQuestions(id, cachedUpdatedAt) {
+  try {
+    const { data } = await supabase
+      .from('exam_banks').select('updated_at,question_count').eq('id', id).maybeSingle();
+    if (!data) return;
+    const changed = String(data.updated_at || '') !== String(cachedUpdatedAt || '');
+    const cur = getQuestions(id);
+    const countChanged = typeof data.question_count === 'number'
+      && Array.isArray(cur) && data.question_count !== cur.length;
+    if (!changed && !countChanged) return;
+    const qs = await fetchFromNet(id, data.updated_at);
+    if (onRefreshQuestions) onRefreshQuestions(id, qs);
+  } catch (e) { /* 后台校验失败没关系：本机这份照样能用 */ }
+}
+
+/* ---------- 后台预取（按列表顺序从前往后，用户点谁谁插队） ---------- */
+const PREFETCH_MAX = 3;      // 最多预取几份：这条链路很慢，别把用户真正要那份的带宽挤掉
+const PREFETCH_DELAY = 1500; // 首屏稳定后再开始：别和「进上次题库」的请求抢带宽
+let prefetchQueue = [];
+let prefetchRunning = false;
+let prefetchCtrl = null;
+let prefetchTimer = null;
+
+/** 停掉当前预取并清空队列（用户开始要某份题库时调用） */
+function abortPrefetch() {
+  prefetchQueue = [];
+  if (prefetchTimer) { clearTimeout(prefetchTimer); prefetchTimer = null; }
+  if (prefetchCtrl) {
+    try { prefetchCtrl.abort(); } catch (e) { /* 忽略 */ }
+    prefetchCtrl = null;
+  }
+}
+
+/**
+ * 列表画完后在后台按顺序预热（v2.32）。
+ * 只预热前 PREFETCH_MAX 份、且只预热本机没有或已过期的，
+ * 每份之间让出 0.6 秒 —— 覆盖「最常点开的那几份」，又不至于把慢链路占满。
+ */
+export function prefetchBanks(list) {
+  if (!Array.isArray(list) || !list.length) return;
+  prefetchQueue = list.slice(0, PREFETCH_MAX)
+    .map(b => ({ id: String(b.id), name: b.name, updatedAt: b.updatedAt || '' }));
+  if (prefetchRunning) return;
+  if (prefetchTimer) clearTimeout(prefetchTimer);
+  prefetchTimer = setTimeout(() => { prefetchTimer = null; runPrefetch(); }, PREFETCH_DELAY);
+}
+
+async function runPrefetch() {
+  if (prefetchRunning) return;
+  prefetchRunning = true;
+  try {
+    while (prefetchQueue.length) {
+      const job = prefetchQueue.shift();
+      if (getQuestions(job.id)) continue;                       // 内存里已有
+      const hit = await getCachedQuestions(job.id);
+      if (hit && sameVersion(hit, job.updatedAt)) {             // 本机已是最新
+        putQuestions(job.id, hit.qs);
+        continue;
+      }
+      const ctrl = new AbortController();
+      prefetchCtrl = ctrl;
+      try {
+        await fetchFromNet(job.id, job.updatedAt, { prefetch: true, ctrl });
+      } catch (e) {
+        if (ctrl.signal.aborted) return;                        // 被用户抢占：队列已清空
+      } finally {
+        if (prefetchCtrl === ctrl) prefetchCtrl = null;
+      }
+      await new Promise(r => setTimeout(r, 600));               // 让出带宽
+    }
+  } finally {
+    prefetchRunning = false;
+  }
 }
 
 async function openBank(b) {
   // 大题库要拉几百 KB，这期间界面没有任何反馈 → 用启动遮罩顶上（加载快就不会出现）
-  showBoot('正在打开题库…');
+  showBoot('正在打开「' + b.name + '」…');
   let qs;
   try {
-    qs = await fetchBankQuestions(b.id);
+    qs = await fetchBankQuestions(b.id, b.updatedAt);
   } catch (e) {
     hideBoot();
     alert('打开失败：' + e.message);
@@ -329,27 +505,61 @@ async function openBank(b) {
   }
 }
 
-export async function openBankById(id) {
-  const cached = getQuestions(id);
-  if (cached) {
-    // 命中缓存就只补一个名字（单列查询，几十字节），不再重下整份题目
-    const name = await bankNameOf(id);
-    if (onOpenBank) await onOpenBank({ id, name, questions: cached });
+/**
+ * 启动时恢复上次的题库。
+ * @param {string} id
+ * @param {string} [knownName] 调用方已知的名字（localStorage 里就存着），省一个往返
+ * @returns {Promise<boolean>} true=已经进了首页；false=本机没有题目，需要调用方走「列表先出 + 后台加载」
+ */
+export async function openBankById(id, knownName) {
+  const mem = getQuestions(id);
+  if (mem) {
+    if (onOpenBank) await onOpenBank({ id, name: cachedNameOf(id) || nameCache.get(String(id)) || knownName || await bankNameOf(id), questions: mem });
     return true;
   }
-  const { data, error } = await supabase.from('exam_banks').select('id,name,questions').eq('id', id).single();
-  if (error || !data) return false;
-  const qs = Array.isArray(data.questions) ? data.questions : [];
-  putQuestions(id, qs);
-  if (onOpenBank) await onOpenBank({ id: data.id, name: data.name, questions: qs });
+  const hit = await getCachedQuestions(id);
+  if (!hit || !Array.isArray(hit.qs) || !hit.qs.length) return false;   // 本机也没有
+  putQuestions(id, hit.qs);
+  const name = cachedNameOf(id) || nameCache.get(String(id)) || knownName || await bankNameOf(id) || '';
+  if (onOpenBank) await onOpenBank({ id, name, questions: hit.qs });
+  // 进页面之后才校验版本：慢一点无所谓，反正界面已经在了
+  revalidateQuestions(id, hit.updatedAt);
   return true;
+}
+
+/**
+ * 启动时本机没有这份题库的题目：**不要挡住页面**（v2.32）。
+ * 调用方先把题库列表画出来（标题、题数都在列表元数据里），
+ * 这份在后台优先加载；好了再回调 onReady，由调用方决定要不要自动进首页。
+ */
+export async function prepareBank(id, name, onReady) {
+  abortPrefetch();
+  const row = (bankListCache || []).find(b => String(b.id) === String(id));
+  try {
+    const qs = await fetchBankQuestions(id, (row && row.updatedAt) || '');
+    // 名字以「取题目时服务端给的」为准，其次列表行，最后才是 localStorage 里那份
+    const nm = nameCache.get(String(id)) || (row && row.name) || name || '';
+    if (onReady) onReady({ id, name: nm, questions: qs });
+    return qs;
+  } catch (e) {
+    return null;
+  }
+}
+
+/** 列表缓存里的名字（不发请求；有就最省事） */
+function cachedNameOf(id) {
+  const row = (bankListCache || []).find(b => String(b.id) === String(id));
+  return (row && row.name) || '';
 }
 
 /** 只取名字（缓存命中时补顶栏用；失败给空串，不影响进练习） */
 async function bankNameOf(id) {
+  const row = (bankListCache || []).find(b => String(b.id) === String(id));
+  if (row && row.name) return row.name;
   const { data } = await supabase.from('exam_banks').select('name').eq('id', id).maybeSingle();
   return (data && data.name) || '';
 }
+
 
 async function renameBank(b) {
   if (!canManage(b)) { denyManage(b); return; }        // 第二道闸
@@ -376,13 +586,20 @@ async function exportBank(b) {
   if (!canManage(b)) { denyManage(b); return; }        // 第二道闸
   let qs;
   try {
-    qs = await fetchBankQuestions(b.id);               // 有缓存就用缓存，省一次整库下载
+    qs = await fetchBankQuestions(b.id, b.updatedAt); // 有缓存就用缓存，省一次整库下载
   } catch (e) {
     alert('导出失败：' + e.message);
     return;
   }
-  const wb = buildBankWorkbook(qs);
-  XLSX.writeFile(wb, (b.name || '题库') + '.xlsx');
+  let X;
+  try {
+    X = await ensureXLSX();                            // 按需加载 Excel 组件
+  } catch (e) {
+    alert('导出失败：' + e.message);
+    return;
+  }
+  const wb = buildBankWorkbook(qs, X);
+  X.writeFile(wb, (b.name || '题库') + '.xlsx');
 }
 
 /**
@@ -677,6 +894,9 @@ if (import.meta.env.DEV) {
     openBankPicker, listBanks, currentBankId,
     closeBankPicker,
     // 打字练习入口：当前是否在打字那几屏 / 是否卡在练习中
-    isOnTypingScreen, busyPracticing
+    isOnTypingScreen, busyPracticing,
+    // v2.32：本机缓存 / 后台预取 / 版本校验的入口（check_speed 用来断言缓存机制）
+    hydrateBankList, prefetchBanks, openBankById, prepareBank,
+    fetchBankQuestions, revalidateQuestions
   };
 }

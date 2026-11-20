@@ -34,15 +34,23 @@ function writeIfChanged(file, content) {
 }
 
 /* ---------- 1) SheetJS（浏览器构建，自带 window.XLSX） ---------- */
+// v2.37：这两个文件已进仓库（.gitignore 不再忽略）。构建环境里没有 node_modules 时，
+// 直接用仓库里那份覆盖，**不要**让构建失败 —— 但也别静默丢掉（见 inline.mjs 的断言）。
 const xlsxSrc = path.join(ROOT, 'node_modules', 'xlsx', 'dist', 'xlsx.core.min.js');
-if (!fs.existsSync(xlsxSrc)) {
-  console.error('[assets] 找不到 node_modules/xlsx/dist/xlsx.core.min.js，请先 npm install');
-  process.exit(1);
-}
 const xlsxOut = path.join(OUT, 'xlsx.min.js');
-const xlsxCode = fs.readFileSync(xlsxSrc, 'utf8');
+if (!fs.existsSync(xlsxSrc)) {
+  if (fs.existsSync(xlsxOut)) {
+    console.warn('[assets] 没有 node_modules/xlsx（未 npm install？），沿用仓库里的 public/lib/xlsx.min.js');
+  } else {
+    console.error('[assets] 既找不到 node_modules/xlsx/dist/xlsx.core.min.js，也没有 public/lib/xlsx.min.js，请先 npm install');
+    process.exit(1);
+  }
+}
+const xlsxCode = fs.existsSync(xlsxSrc) ? fs.readFileSync(xlsxSrc, 'utf8') : null;
 // 加个标记，验收脚本据此确认「加载的是按需件，不是主包内联」
-const xlsxChanged = writeIfChanged(xlsxOut, '/* credit-exam-cloud · 按需加载件：Excel 解析/导出（v2.32） */\n' + xlsxCode);
+const xlsxChanged = xlsxCode
+  ? writeIfChanged(xlsxOut, '/* credit-exam-cloud · 按需加载件：Excel 解析/导出（v2.32） */\n' + xlsxCode)
+  : false;
 
 /* ---------- 2) 五笔码表（ES 模块 → IIFE） ---------- */
 const wubiSrc = path.join(ROOT, 'src', 'wubi.js');

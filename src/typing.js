@@ -341,21 +341,27 @@ async function finish(byTimeout) {
   const speed = Math.round(okCount / (sec / 60));
   const acc = typedCount ? Math.round(okCount / typedCount * 100) : 100;
 
-  $('tpResTitle').textContent = byTimeout ? '⏰ 时间到！' : '练习完成 🎉';
-  $('tpResTime').textContent = fmt(sec);
-  $('tpResSpeed').textContent = speed;
-  $('tpResAcc').textContent = acc + '%';
-  $('tpResChars').textContent = typedCount + ' / ' + totalChars;
-  // 状态栏也刷成结算口径，别停在计时器最后一次 tick 的旧值上
-  updateStats();
-  $('tpStTime').textContent = fmt(sec);
-  $('tpStSpeed').textContent = speed + '字/分';
-  const errs = Object.entries(errMap).sort((a, b) => b[1] - a[1]);
-  $('tpErrBox').classList.toggle('hide', !errs.length);
-  $('tpErrList').textContent = errs.map(([c, n]) => c + '×' + n).join('　');
-  $('tpResMsg').textContent = '正在保存练习记录…';
+  // 结算框必须先弹出来：这里任何一步抛异常，都不能把用户留在「已结束、又没界面」的死角。
+  // v2.36 的 bug 就是这条链没兜底 —— 一旦出错，finished 已是 true，点「结束本次」被早退，整屏卡死。
+  try {
+    $('tpResTitle').textContent = byTimeout ? '⏰ 时间到！' : '练习完成 🎉';
+    $('tpResTime').textContent = fmt(sec);
+    $('tpResSpeed').textContent = speed;
+    $('tpResAcc').textContent = acc + '%';
+    $('tpResChars').textContent = typedCount + ' / ' + totalChars;
+    // 状态栏也刷成结算口径，别停在计时器最后一次 tick 的旧值上
+    updateStats();
+    $('tpStTime').textContent = fmt(sec);
+    $('tpStSpeed').textContent = speed + '字/分';
+    const errs = Object.entries(errMap).sort((a, b) => b[1] - a[1]);
+    $('tpErrBox').classList.toggle('hide', !errs.length);
+    $('tpErrList').textContent = errs.map(([c, n]) => c + '×' + n).join('　');
+    $('tpResMsg').textContent = '正在保存练习记录…';
+  } catch (e) {
+    console.error('[typing] 结算界面填充出错：', e);
+  }
   $('tpResModal').classList.remove('hide');
-  ghost().blur();
+  try { ghost().blur(); } catch (e) { }
 
   if (!totalChars) { $('tpResMsg').textContent = '未产生有效数据，本次不记录。'; return; }
   const rec = {
@@ -372,8 +378,23 @@ async function finish(byTimeout) {
     timed_out: !!byTimeout
   };
   if (!rec.user_id) { $('tpResMsg').textContent = '登录状态丢失，本次成绩未保存。'; return; }
-  const { error } = await supabase.from('exam_typing_records').insert(rec);
-  $('tpResMsg').textContent = error ? '保存失败：' + error.message : '已保存到练习记录。';
+  // 写库失败只影响「有没有上传」，不能反过来影响已经算好的结算界面
+  try {
+    const { error } = await supabase.from('exam_typing_records').insert(rec);
+    $('tpResMsg').textContent = error ? '保存失败：' + error.message : '已保存到练习记录。';
+  } catch (e) {
+    $('tpResMsg').textContent = '保存失败：' + ((e && e.message) || '网络异常') + '（本次成绩未上传）';
+  }
+}
+
+/**
+ * 结算框的收尾动作：收弹窗 → 复位本次会话 → 回字库。
+ * 三处入口共用（点「关闭」、点遮罩、已结算时点「结束本次」），别再各写一份。
+ */
+function closeResultAndExit() {
+  $('tpResModal').classList.add('hide');
+  resetSession();
+  if (onExit) onExit();
 }
 
 /* ============================================================
@@ -419,7 +440,9 @@ export function initTyping(cb) {
   });
   $('tpRestart').addEventListener('click', () => { resetSession(); render(); });
   $('tpStop').addEventListener('click', () => {
-    if (finished) return;
+    // v2.36：时间到会自动结算（finished=true），老代码在这里直接 return，
+    // 用户的感受就是「点了结束本次没反应」，而屏幕其实已经停在只读状态。
+    if (finished) { closeResultAndExit(); return; }
     if (!started) { if (onExit) onExit(); return; }
     if (confirm('结束本次练习并保存成绩？')) finish(false);
   });
@@ -439,7 +462,12 @@ export function initTyping(cb) {
     if (curHz) loadText(curHzText || '', parseInt($('tpPerLine').value, 10) || 35);
   });
 
-  $('tpResClose').addEventListener('click', () => $('tpResModal').classList.add('hide'));
+  // 「关闭」= 本次到此为止：收弹窗 + 复位（否则回到打字屏是 finished 状态，打不进字也结束不了）
+  // 想留在本屏重打请用「再打一遍」（它只复位、不离开）
+  $('tpResClose').addEventListener('click', closeResultAndExit);
+  // 点遮罩等同关闭：否则时间到之后用户点「结束本次」，其实点在了遮罩上 —— 看着就是「没反应」
+  const resMask = $('tpResModal').querySelector('.modal-mask');
+  if (resMask) resMask.addEventListener('click', closeResultAndExit);
   $('tpResAgain').addEventListener('click', () => { $('tpResModal').classList.add('hide'); resetSession(); render(); });
 
   // 点空白处把焦点还给输入框（只在练习屏、且没弹窗时）

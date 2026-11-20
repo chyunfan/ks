@@ -40,6 +40,7 @@
  *    C6 可见范围有触发器锁（非管理员且非上传者改不动）
  *    C7 insert 触发器按服务端身份定 source / owner，防前端伪造「管理员上传」
  *    C8 同一个触发器也把 name 锁住 —— 改名同样只有管理员/上传者能动
+ *  G. 限时到点之后（v2.36）：自动结算要弹框、「结束本次」/「关闭」/「再打一遍」三条出路都要有反应
  *  D. 源码守卫（防止以后被改回去）
  *  E. 手机端 375px：字库行不横向溢出、练习屏可用
  *  F. 全程无 JS 报错
@@ -557,6 +558,85 @@ chk(align2.every(d => d === 0), 'E2 窄屏上下行仍逐列对齐', align2.join
 await page.screenshot({ path: path.join(SHOTS, 'typing-mobile.png') });
 
 /* ---------- 10. F. 无 JS 报错 ---------- */
+/* ---------- G. 限时到点之后的出路（v2.36 修的 bug） ---------- */
+// 用户报的现象：「打字练习开始后，5 分钟到时，点『结束本次』没反应」。
+// 根因有两层：
+//   ① 时间到会自动结算（finished=true），而「结束本次」开头 `if (finished) return;` —— 直接哑火；
+//   ② 结算框「关闭」只隐藏弹窗、不复位会话 → 回到打字屏是「打不进字也结束不了」的只读死角；
+//      而且弹窗遮罩不响应点击，用户点的「结束本次」其实落在遮罩上，看着就是完全没反应。
+console.log('\n【G. 限时到点之后】');
+await page.setViewportSize({ width: 1280, height: 900 });   // E 段收在窄屏，这里恢复桌面宽度
+const viewSr = () => page.evaluate(() => ({
+  typing: !document.getElementById('typing').classList.contains('hide'),
+  hzk: !document.getElementById('hzk').classList.contains('hide'),
+  res: !document.getElementById('tpResModal').classList.contains('hide'),
+  st: window.__typing.state()
+}));
+const enterTyping = async () => {
+  // E 段结束时停在打字屏，先退出来再看要不要切到字库屏
+  if (await visible('#typing')) { await page.click('#tpBack'); await page.waitForTimeout(500); }
+  if (!(await visible('#hzk'))) {
+    await page.click('#toTyping').catch(() => { });
+    await page.waitForTimeout(600);
+  }
+  await page.waitForSelector('#hzkList .bank-row[data-id="h-mine"] .act-type', { timeout: 15000 });
+  await page.click('#hzkList .bank-row[data-id="h-mine"] .act-type');
+  await page.waitForTimeout(600);
+  await type('敢于正视');
+};
+
+// G1 时间到自动结算：必须弹出结算框，不能静默结束
+await enterTyping();
+await page.evaluate(() => window.__typing.finish(true));
+await page.waitForTimeout(500);
+let v = await viewSr();
+chk(v.res, 'G1 限时到点自动结算，弹出结算框', JSON.stringify({ res: v.res, st: v.st }));
+chk((await page.textContent('#tpResTitle')).indexOf('时间到') >= 0, 'G1 结算标题是「时间到」', await page.textContent('#tpResTitle'));
+
+// G2 点「结束本次」：真实位置被遮罩盖住，也必须收尾离开（遮罩点击 = 关闭）
+await page.click('#tpStop', { force: true });
+await page.waitForTimeout(700);
+v = await viewSr();
+chk(!v.typing && v.hzk && !v.res, 'G2 时间到后点「结束本次」有反应：结算框收起并回到字库屏',
+  JSON.stringify({ typing: v.typing, hzk: v.hzk, res: v.res }));
+chk(!v.st.finished && !v.st.started, 'G2 会话已复位（下次进来不是只读状态）', JSON.stringify(v.st));
+
+// G3 「关闭」同样是收尾：复位 + 回字库，不再留一个只读空屏
+await enterTyping();
+await page.evaluate(() => window.__typing.finish(true));
+await page.waitForTimeout(400);
+await page.click('#tpResClose');
+await page.waitForTimeout(700);
+v = await viewSr();
+chk(!v.typing && v.hzk && !v.st.finished, 'G3 结算框「关闭」= 收尾复位并回字库（不留只读空屏）',
+  JSON.stringify({ typing: v.typing, hzk: v.hzk, st: v.st }));
+
+// G4 「再打一遍」仍然留在本屏，并且真的能继续打
+await enterTyping();
+await page.evaluate(() => window.__typing.finish(true));
+await page.waitForTimeout(400);
+await page.click('#tpResAgain');
+await page.waitForTimeout(500);
+v = await viewSr();
+chk(v.typing && !v.res && !v.st.finished && v.st.charIdx === 0, 'G4 「再打一遍」留在本屏并复位到开头',
+  JSON.stringify({ typing: v.typing, res: v.res, st: v.st }));
+await type('敢于');
+v = await viewSr();
+chk(v.st.charIdx === 2 && v.st.started, 'G4 重打后能继续输入', 'charIdx=' + v.st.charIdx);
+await page.click('#tpStop');
+await page.waitForTimeout(600);
+await page.click('#tpResClose');
+await page.waitForTimeout(400);
+
+// G5 源码守卫：收尾只有一份实现，别再各处手写
+const tpSrc = fs.readFileSync(path.join(ROOT, 'src/typing.js'), 'utf8');
+chk(/function closeResultAndExit/.test(tpSrc), 'G5 结算收尾统一走 closeResultAndExit');
+chk(/if \(finished\) \{ closeResultAndExit\(\); return; \}/.test(tpSrc),
+  'G5 「结束本次」在已结算时必须收尾离开（不许再 `if (finished) return;`）');
+chk(/querySelector\('\.modal-mask'\)[\s\S]{0,80}addEventListener\('click', closeResultAndExit\)/.test(tpSrc)
+  || /resMask\.addEventListener\('click', closeResultAndExit\)/.test(tpSrc),
+  'G5 结算框遮罩点击 = 关闭（否则用户点按钮其实点在遮罩上）');
+
 console.log('\n【F. 运行期】');
 chk(jsErrors.length === 0, 'F1 全程无 JS 报错', jsErrors.slice(0, 3).join(' | '));
 

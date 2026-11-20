@@ -60,6 +60,13 @@ const wubiCode = fs.existsSync(libW) ? fs.readFileSync(libW, 'utf8') : '';
 chk(/window\.__WUBI\s*=\s*WUBI/.test(wubiCode), 'B3 五笔码表被包成普通脚本（挂 window.__WUBI）', '');
 chk(!/^\s*export\s/m.test(wubiCode), 'B3 码表产物里没有 ESM 导出（才能当普通 <script> 加载）', '');
 chk(/id="bootMask"/.test(dist), 'B4 首屏骨架仍在（遮罩兜底）', '');
+// v2.37：这两个文件必须**跟着仓库走**，不能只靠构建时生成（2026-11-20 线上就是这么挂的）
+const repoLib = path.join(ROOT, 'public/lib/xlsx.min.js');
+const gi = fs.readFileSync(path.join(ROOT, '.gitignore'), 'utf8')
+  .split('\n').filter(l => !/^\s*#/.test(l)).join('\n');
+chk(fs.existsSync(repoLib) && fs.statSync(repoLib).size > 300 * 1024, 'B5 public/lib/xlsx.min.js 已入库（不只在构建时生成）',
+  fs.existsSync(repoLib) ? fs.statSync(repoLib).size + ' B' : '缺失');
+chk(!/^\s*public\/lib\/?\s*$/m.test(gi), 'B5 .gitignore 没有再把 public/lib 排除掉', '');
 
 /* ---------- C. 运行时：真的能加载、只加载一次、路径可回退 ---------- */
 const srv = spawn(process.execPath, [path.join(ROOT, 'node_modules/vite/bin/vite.js'), '--port', String(PORT), '--strictPort'], {
@@ -122,6 +129,17 @@ const libReqs = reqs.map(x => x.url);
 chk(libReqs.some(u => /\/ks\/lib\/xlsx\.min\.js/.test(u)), 'C7 按需件按运行时前缀取到（/ks/lib/...）', JSON.stringify(libReqs));
 chk(jsErrors.length === 0, 'C8 全程无 JS 报错', jsErrors.join(' | '));
 
+// 失败时的诊断：把「404 被换成 HTML」这种情况认出来（v2.37）
+// 线上事故现场就是它：onload 触发了、但没有 window.XLSX，控制台只有一句
+// SyntaxError: Unexpected token '<'。拿一个**确定返回 HTML** 的地址来验诊断能力。
+const probe = await page.evaluate(async () => {
+  const a = await window.__lazylib.libProbe('/ks/');                  // 网页
+  const b = await window.__lazylib.libProbe('/ks/lib/xlsx.min.js?v=1'); // 真脚本
+  return { a, b };
+});
+chk(probe.a.kind === 'html', 'C9 返回网页时诊断成 html（能说清「部署里缺 dist/lib」）', JSON.stringify(probe.a));
+chk(probe.b.kind === 'js', 'C9 正常件诊断成 js（不误报）', JSON.stringify(probe.b));
+
 /* ---------- D. 源码守卫 ---------- */
 console.log('\n【D】源码守卫');
 const assetsSrc = fs.readFileSync(path.join(ROOT, 'src/assets.js'), 'utf8');
@@ -131,6 +149,10 @@ chk(/LIB_VER/.test(assetsSrc), 'D2 有缓存版本号，升级组件可换 URL',
 chk(/--inline-lib/.test(fs.readFileSync(path.join(ROOT, 'scripts/inline.mjs'), 'utf8')),
   'D3 保留单文件构建（build:single，内网离线分发仍只要一个 HTML）', '');
 chk(/window\.__WUBI/.test(prepSrc), 'D4 构建前置把码表转成普通脚本', '');
+// v2.37：构建时就把「lib 缺失」拦下来，而不是等用户点「下载模板」时才炸
+chk(/dist\/lib 里缺少|LIB_FILES/.test(fs.readFileSync(path.join(ROOT, 'scripts/inline.mjs'), 'utf8')),
+  'D5 构建后处理会断言 dist/lib 存在（漏传则构建失败）', '');
+chk(/部署里缺 dist\/lib/.test(assetsSrc), 'D6 加载失败时给出「部署缺 dist/lib」这种能排查的提示', '');
 
 await browser.close();
 srv.kill('SIGTERM');

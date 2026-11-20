@@ -46,6 +46,40 @@ function injectScript(url) {
 }
 
 const pending = new Map();   // name → Promise（并发调用共用一次加载）
+const LABEL = { xlsx: 'Excel 组件', wubi: '五笔码表' };   // 出错提示里说人话
+
+/**
+ * 失败诊断：这个地址到底返回了什么（只在出错时调用，正常路径零开销）
+ *
+ * 为什么需要：灾难现场是「脚本加载成功（onload 触发了）但没有 window.XLSX」——
+ * 因为服务器把 404 换成了 **200 的 HTML 页面**（Vercel 的 SPA 兜底、网关首页都是这德行），
+ * 浏览器照单当脚本执行，报一句 "Unexpected token '<'" 就没了。
+ * 光看那句话，谁也猜不到「部署里缺 dist/lib」。这里把响应类型摸清楚，给一句人话。
+ */
+export async function libProbe(url) {
+  try {
+    const r = await fetch(url, { cache: 'no-store' });
+    const ct = (r.headers.get('content-type') || '').toLowerCase();
+    const head = r.ok ? (await r.text()).slice(0, 200) : '';
+    if (!r.ok) return { kind: 'http', status: r.status, ct };
+    if (ct.includes('html') || /^\s*</.test(head)) return { kind: 'html', status: r.status, ct };
+    return { kind: 'js', status: r.status, ct };
+  } catch (e) {
+    return { kind: 'net', status: 0, ct: '' };
+  }
+}
+
+/** 把诊断结果翻译成一句用户/管理员都能用的话 */
+function libErrText(file, probe) {
+  const at = '/lib/' + file;
+  if (probe.kind === 'html') {
+    return '服务器上没有 ' + at + '（这个地址返回的是网页，不是脚本）——部署里缺 dist/lib';
+  }
+  if (probe.status === 404) return '服务器上找不到 ' + at + '——部署里缺 dist/lib';
+  if (probe.kind === 'http') return at + ' 打不开（HTTP ' + probe.status + '）';
+  return '连不上服务器，取不到 ' + at;
+}
+
 
 /**
  * 加载一个挂全局变量的库。
@@ -65,12 +99,19 @@ async function loadLib(name, file, marker) {
       if (window[marker]) return window[marker];
     }
     let lastErr = null;
+    let lastUrl = '';
     for (const url of libUrls(file)) {
+      lastUrl = url;
       try {
         await injectScript(url);
         if (window[marker]) return window[marker];
         lastErr = new Error('脚本已加载但没有导出 ' + marker + '：' + url);
       } catch (e) { lastErr = e; }
+    }
+    // 全部候选都失败：问一下最后一个地址到底给了什么，再拼一句能用来排查的话
+    if (lastUrl) {
+      const probe = await libProbe(lastUrl);
+      throw new Error((LABEL[name] || '组件') + '加载失败：' + libErrText(file, probe) + '。刷新重试，仍不行请联系管理员。');
     }
     throw new Error('组件加载失败，请检查网络后重试'
       + (lastErr ? '（' + lastErr.message + '）' : ''));
@@ -88,5 +129,5 @@ export function ensureWubi() { return loadLib('wubi', 'wubi.js', '__WUBI'); }
 
 // 验收脚本用（生产构建剔除）：确认主包确实不再内联这两个大件
 if (import.meta.env.DEV) {
-  window.__lazylib = { libUrls, ensureXLSX, ensureWubi };
+  window.__lazylib = { libUrls, libProbe, ensureXLSX, ensureWubi };
 }

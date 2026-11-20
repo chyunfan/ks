@@ -24,7 +24,11 @@ export function initBanks(cb) {
   onOpenTyping = cb.onOpenTyping;
   onRefreshQuestions = cb.onRefreshQuestions || null;
 
-  document.getElementById('importBtn').addEventListener('click', () => document.getElementById('fileInput').click());
+  // v2.38：「下载空模板」不再是工具栏上的第二个按钮 —— 点「导入题库」先开弹窗，
+  // 第一屏给「选择文件」和「下载空模板」两条路；选完文件原地切到预览，不另开一层。
+  document.getElementById('importBtn').addEventListener('click', openImport);
+  document.getElementById('importPickFile').addEventListener('click', pickFile);
+  document.getElementById('importRepick').addEventListener('click', pickFile); // 解析错了直接再选，不必关弹窗
   // Excel 组件是**按需加载**的（v2.32）：第一次点模板/导入/导出时下 427 KB，之后走缓存。
   document.getElementById('tplBtn').addEventListener('click', async () => {
     try {
@@ -46,6 +50,33 @@ export function initBanks(cb) {
   const bpMask = document.getElementById('bankPickMask');
   if (bpMask) bpMask.addEventListener('click', closeBankPicker);
   document.addEventListener('keydown', e => { if (e.key === 'Escape') closeBankPicker(); });
+}
+
+// ============================================================
+// 导入弹窗：两屏（v2.38）
+// ------------------------------------------------------------
+// 以前「导入题库」和「下载空模板」是并排的两个按钮，工具栏挤，而且没模板的人
+// 得先点右边那个、下载完再回头点左边。现在只有一个入口，点开弹窗：
+//   第一屏 pick   —— 选择文件 / 下载空模板
+//   第二屏 result —— 解析结果 + 题库名 + 保存（选完文件自动切过来）
+// 关掉或保存成功后回到第一屏、清空上次的预览，不留残渣。
+// ============================================================
+function pickFile() { document.getElementById('fileInput').click(); }
+
+function setImportStage(stage) {
+  const pick = document.getElementById('importPick');
+  const res = document.getElementById('importResult');
+  if (pick) pick.classList.toggle('hide', stage !== 'pick');
+  if (res) res.classList.toggle('hide', stage !== 'result');
+}
+
+function openImport() {
+  pendingImport = null;
+  document.getElementById('importPreview').innerHTML = '';
+  document.getElementById('bankName').value = '';
+  document.getElementById('saveBankBtn').disabled = true;
+  setImportStage('pick');
+  document.getElementById('importModal').classList.remove('hide');
 }
 
 async function onFile(e) {
@@ -78,7 +109,8 @@ async function onFile(e) {
       document.getElementById('saveBankBtn').disabled = false;
     }
     document.getElementById('bankName').value = file.name.replace(/\.xlsx?$/i, '');
-    document.getElementById('importModal').classList.remove('hide');
+    setImportStage('result');
+    document.getElementById('importModal').classList.remove('hide');   // 万一没走弹窗进来的（拖拽），也要弹
   } catch (err) {
     alert('读取文件失败：' + err.message);
   } finally {
@@ -89,6 +121,7 @@ async function onFile(e) {
 function closeImport() {
   document.getElementById('importModal').classList.add('hide');
   pendingImport = null;
+  setImportStage('pick');      // 下次打开是干净的第一屏
 }
 
 async function saveImport() {

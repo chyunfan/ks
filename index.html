@@ -76,10 +76,9 @@
           <h2>导入题库（.xlsx 模板）</h2>
           <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
             <button id="importBtn" class="btn btn-primary" type="button">导入题库</button>
-            <button id="tplBtn" class="btn btn-ghost btn-sm" type="button">下载空模板</button>
             <input type="file" id="fileInput" accept=".xlsx,.xls" class="hide">
           </div>
-          <div class="muted" style="margin-top:8px">题型仅限 单选 / 多选 / 判断 / 案例；选项最多 A–F。点「下载空模板」查看格式。</div>
+          <div class="muted" style="margin-top:8px">题型仅限 单选 / 多选 / 判断 / 案例；选项最多 A–F。点「导入题库」后可先下载空模板对格式。</div>
         </div>
         <div id="bankList"></div>
       </div>
@@ -447,9 +446,27 @@
   <div class="modal-box">
     <div class="modal-head"><span>导入题库</span><button class="modal-x" id="importClose" type="button">✕</button></div>
     <div class="modal-body">
-      <div id="importPreview" style="margin-bottom:12px"></div>
-      <input id="bankName" class="field" placeholder="题库名称" style="margin-bottom:12px">
-      <button id="saveBankBtn" class="btn btn-primary" type="button" disabled>保存题库</button>
+      <!-- 第一屏：还没选文件。选文件 / 下模板两个入口都收在这里（v2.38） -->
+      <div id="importPick">
+        <div class="pick-box">
+          <div class="pick-ic">📄</div>
+          <div class="pick-t">选择 Excel 文件导入</div>
+          <div class="pick-d">支持 .xlsx / .xls，首行是表头。<br>题型仅限 单选 / 多选 / 判断 / 案例，选项最多 A–F。</div>
+          <div class="pick-act">
+            <button id="importPickFile" class="btn btn-primary" type="button">选择文件</button>
+            <button id="tplBtn" class="lib-link" type="button">还没有模板？<b>下载空模板</b></button>
+          </div>
+        </div>
+      </div>
+      <!-- 第二屏：选完文件后看解析结果、填题库名、保存 -->
+      <div id="importResult" class="hide">
+        <div id="importPreview" style="margin-bottom:12px"></div>
+        <input id="bankName" class="field" placeholder="题库名称" style="margin-bottom:12px">
+        <div class="scope-foot">
+          <button id="importRepick" class="btn btn-ghost btn-sm" type="button">重新选择</button>
+          <button id="saveBankBtn" class="btn btn-primary" type="button" disabled>保存题库</button>
+        </div>
+      </div>
     </div>
   </div>
 </div>

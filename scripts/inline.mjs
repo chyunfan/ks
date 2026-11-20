@@ -31,6 +31,22 @@ function toLocal(href) {
   return direct;
 }
 
+// 0) 按需加载件必须在产物里（v2.37）
+// ------------------------------------------------------------
+// index.html 里**不内联**这两个大件，用户点「下载模板 / 导入题库 / 导出」时才去
+// /lib/ 取。2026-11-20 的线上事故就是这里断了：部署产物里没有 dist/lib →
+// /ks/lib/xlsx.min.js 返回 404（Vercel 的 NOT_FOUND 页面）→ 浏览器把那段 HTML
+// 当脚本执行 → 控制台 "Unexpected token '<'" → 用户看到「模板下载失败」。
+// 与其让用户点按钮时才炸，不如让构建直接失败。
+const LIB_FILES = ['xlsx.min.js', 'wubi.js'];
+const libMissing = LIB_FILES.filter(f => !fs.existsSync(path.join(dist, 'lib', f)));
+if (libMissing.length) {
+  console.error('[inline] ✗ 失败：dist/lib 里缺少 ' + libMissing.join('、') + '，构建中止');
+  console.error('        它们不在 index.html 里，缺了就是「下载模板 / 导入 / 导出」全挂。');
+  console.error('        处理：npm install 后跑 npm run assets，再重新构建。');
+  process.exit(1);
+}
+
 // 1) 内联 <link rel="stylesheet">
 let cssCount = 0;
 html = html.replace(/<link[^>]*rel="stylesheet"[^>]*>/gi, (tag) => {

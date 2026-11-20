@@ -69,15 +69,13 @@ export async function libProbe(url) {
   }
 }
 
-/** 把诊断结果翻译成一句用户/管理员都能用的话 */
-function libErrText(file, probe) {
-  const at = '/lib/' + file;
-  if (probe.kind === 'html') {
-    return '服务器上没有 ' + at + '（这个地址返回的是网页，不是脚本）——部署里缺 dist/lib';
-  }
-  if (probe.status === 404) return '服务器上找不到 ' + at + '——部署里缺 dist/lib';
-  if (probe.kind === 'http') return at + ' 打不开（HTTP ' + probe.status + '）';
-  return '连不上服务器，取不到 ' + at;
+/** 把诊断结果翻译成一句用户/管理员都能用的话（路径用真的那个，别写死 /lib/） */
+function libErrText(url, probe) {
+  const path = String(url || '').replace(/^https?:\/\/[^/]+/i, '') || '/lib/';
+  if (probe.kind === 'html') return path + ' 取不到（返回的是网页，不是脚本）：部署产物里没有 lib 目录';
+  if (probe.status === 404) return path + ' 404：部署产物里没有 lib 目录';
+  if (probe.kind === 'http') return path + ' 打不开（HTTP ' + probe.status + '）';
+  return '连不上服务器，取不到 ' + path;
 }
 
 
@@ -99,19 +97,26 @@ async function loadLib(name, file, marker) {
       if (window[marker]) return window[marker];
     }
     let lastErr = null;
-    let lastUrl = '';
-    for (const url of libUrls(file)) {
-      lastUrl = url;
+    const urls = libUrls(file);
+    for (const url of urls) {
       try {
         await injectScript(url);
         if (window[marker]) return window[marker];
         lastErr = new Error('脚本已加载但没有导出 ' + marker + '：' + url);
       } catch (e) { lastErr = e; }
     }
-    // 全部候选都失败：问一下最后一个地址到底给了什么，再拼一句能用来排查的话
-    if (lastUrl) {
-      const probe = await libProbe(lastUrl);
-      throw new Error((LABEL[name] || '组件') + '加载失败：' + libErrText(file, probe) + '。刷新重试，仍不行请联系管理员。');
+    // 全部候选都失败：先问「最该成功的那一个」——运行时前缀推出来的 /ks/lib/...，
+    // 那才是应用自己部署的位置。站点根候选常常是别的东西（网关首页也 200 返回 HTML），
+    // 拿它当证据会指错方向。
+    if (urls.length) {
+      let probedUrl = urls[0];
+      let probe = await libProbe(probedUrl);
+      if (probe.kind === 'net' && urls.length > 1) {
+        probedUrl = urls[urls.length - 1];
+        probe = await libProbe(probedUrl);
+      }
+      throw new Error((LABEL[name] || '组件') + '加载失败：' + libErrText(probedUrl, probe)
+        + '。若刚部署过，请确认仓库里有 public/lib/ 下那两个文件。');
     }
     throw new Error('组件加载失败，请检查网络后重试'
       + (lastErr ? '（' + lastErr.message + '）' : ''));

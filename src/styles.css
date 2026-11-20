@@ -421,14 +421,16 @@ input[type=number]{width:90px;padding:8px 10px;border:1.5px solid var(--line);bo
 .seg button.active{background:var(--brand);border-color:var(--brand);color:#fff}
 .field{width:100%;padding:12px 14px;border:1.5px solid var(--line);border-radius:12px;font-size:15px;color:var(--ink);margin-bottom:10px}
 .field:focus{outline:none;border-color:var(--brand)}
-/* 导入弹窗第一屏：选文件 / 下载空模板（v2.38） */
+/* 导入弹窗第一屏：下载空模板 / 选择文件（v2.38，v2.39 把模板挪到主按钮上方并加重） */
 .pick-box{border:1.5px dashed var(--line);border-radius:14px;padding:16px 14px;text-align:center;background:#fafbfd}
 .pick-ic{font-size:26px;line-height:1.1;margin-bottom:6px}
 .pick-t{font-size:15px;font-weight:700;margin-bottom:6px}
 .pick-d{font-size:12px;color:var(--sub);line-height:1.65;margin-bottom:12px}
-.pick-act{display:flex;flex-direction:column;align-items:center;gap:9px}
+.pick-act{display:flex;flex-direction:column;align-items:center;gap:10px}
 .pick-act .btn{width:100%;max-width:220px}
-.pick-act .lib-link{margin-top:0}
+/* 「下载空模板」：浅底 + 描边，看得出是按钮，但不跟主按钮抢 */
+.btn-soft{background:#f0fdfa;color:#0f766e;border:1px solid #99f6e4;box-shadow:none;padding:11px 18px;font-size:14px}
+.btn-soft:hover{background:#ccfbf1;border-color:#5eead4}
 .topbar2{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:16px;
   background:#fff;border:1px solid var(--line);border-radius:14px;padding:10px 14px;box-shadow:var(--shadow)}
 .tb-left{display:flex;align-items:center;gap:10px}

@@ -159,7 +159,20 @@ await page.waitForTimeout(300);
 chk(await visible('#importModal'), 'B1 点「导入题库」弹出弹窗', '');
 chk(await visible('#importPick'), 'B2 第一屏显示「选择文件 / 下载空模板」', '');
 chk(!(await visible('#importResult')), 'B2 第一屏看不到题库名 / 保存按钮（还没选文件）', '');
-chk(await visible('#importPickFile') && await visible('#tplBtn'), 'B3 两个入口都在：选择文件 + 下载空模板', '');
+chk(await visible('#importPickFile') && await visible('#tplBtn'), 'B3 两个入口都在：下载空模板 + 选择文件', '');
+// v2.39：模板按钮要摆在主按钮**上方**，而且要像个按钮（不是一行小字链接）
+const order = await page.evaluate(() => {
+  const t = document.getElementById('tplBtn').getBoundingClientRect();
+  const f = document.getElementById('importPickFile').getBoundingClientRect();
+  return {
+    isBtn: document.getElementById('tplBtn').classList.contains('btn'),
+    above: t.top < f.top,
+    sameWidth: Math.abs(t.width - f.width) < 2,
+    h: Math.round(t.height)
+  };
+});
+chk(order.isBtn && order.above, 'B5 下载模板在「选择文件」上方（顺序如上）', JSON.stringify(order));
+chk(order.sameWidth && order.h >= 34, 'B5 下载模板是按钮尺寸（与主按钮同宽、可点区域够大）', JSON.stringify(order));
 chk(libReqs().length === before, 'B4 只是打开弹窗，不下载 427 KB 的 Excel 组件（点了才下）', libReqs().length - before + ' 个请求');
 await page.screenshot({ path: path.join(SHOTS, 'importui-1-pick.png'), fullPage: false });
 
@@ -246,7 +259,7 @@ const banksSrc = fs.readFileSync(path.join(ROOT, 'src/banks.js'), 'utf8');
 const htmlSrc = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
 chk(/function openImport\(/.test(banksSrc) && /function setImportStage\(/.test(banksSrc),
   'H1 弹窗有 openImport / setImportStage（两屏切换）', '');
-chk(/id="tplBtn"[^>]*>还没有模板/.test(htmlSrc), 'H2 下载入口文案挂在弹窗第一屏（「还没有模板？」）', '');
+chk(/id="tplBtn"[^>]*>下载空模板/.test(htmlSrc), 'H2 下载入口在弹窗第一屏（「下载空模板」）', '');
 chk(!/id="tplBtn"[^>]*class="btn btn-ghost/.test(htmlSrc), 'H2 工具栏里不再有第二个 ghost 按钮', '');
 chk(/closeImport[\s\S]{0,200}setImportStage\('pick'\)/.test(banksSrc), 'H3 关闭时复位到第一屏', '');
 chk(jsErrors.length === 0, 'H4 全程无 JS 报错', jsErrors.join(' | '));

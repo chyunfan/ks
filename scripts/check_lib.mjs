@@ -152,7 +152,8 @@ chk(/window\.__WUBI/.test(prepSrc), 'D4 构建前置把码表转成普通脚本'
 // v2.37：构建时就把「lib 缺失」拦下来，而不是等用户点「下载模板」时才炸
 chk(/dist\/lib 里缺少|LIB_FILES/.test(fs.readFileSync(path.join(ROOT, 'scripts/inline.mjs'), 'utf8')),
   'D5 构建后处理会断言 dist/lib 存在（漏传则构建失败）', '');
-chk(/部署里缺 dist\/lib/.test(assetsSrc), 'D6 加载失败时给出「部署缺 dist/lib」这种能排查的提示', '');
+chk(/部署产物里没有 lib 目录/.test(assetsSrc) && /public\/lib\//.test(assetsSrc),
+  'D6 加载失败时直说「部署产物里没有 lib 目录」并指向 public/lib/', '');
 
 await browser.close();
 srv.kill('SIGTERM');

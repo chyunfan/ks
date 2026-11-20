@@ -19,11 +19,18 @@ const BASE = (import.meta.env.BASE_URL || '/').replace(/\/+$/, '');
 
 // /lib 下的文件是**固定文件名**（不走打包器哈希），靠 vercel.json 的 7 天缓存省流量。
 // 哪天升级了 xlsx 或重生成码表，把这个版本号 +1，用户端立刻换新（缓存键带查询串）。
-const LIB_VER = '1';
+//
+// v2.40 把 1 → 2：2026-11-20 的第二次事故不是「文件没上传」，而是**上传之前那个 404
+// 被 CDN 缓存了**（X-Vercel-Cache: HIT，Age 1970s）。URL 一直是 ?v=1，缓存键不变，
+// 于是文件明明已经 200（437108 字节）用户还是点不出来。换版本号 = 换缓存键，立刻好。
+const LIB_VER = '2';
 
-/** 候选地址：页面实际所在子路径 → 站点根 → 构建期前缀 */
-function libUrls(file) {
-  const tail = '/lib/' + file + '?v=' + LIB_VER;
+/**
+ * 候选地址：页面实际所在子路径 → 站点根 → 构建期前缀
+ * @param {boolean} bust 带一次性参数，用来穿透「404 被 CDN / 浏览器缓存住」的情况
+ */
+function libUrls(file, bust) {
+  const tail = '/lib/' + file + '?v=' + LIB_VER + (bust ? '&_=' + Date.now().toString(36) : '');
   const list = [];
   const rt = runtimePrefix();
   if (rt) list.push(rt + tail);
@@ -73,11 +80,28 @@ export async function libProbe(url) {
 function libErrText(url, probe) {
   const path = String(url || '').replace(/^https?:\/\/[^/]+/i, '') || '/lib/';
   if (probe.kind === 'html') return path + ' 取不到（返回的是网页，不是脚本）：部署产物里没有 lib 目录';
-  if (probe.status === 404) return path + ' 404：部署产物里没有 lib 目录';
+  if (probe.status === 404) return path + ' 404（已换地址重试过）：部署产物里没有 lib 目录';
   if (probe.kind === 'http') return path + ' 打不开（HTTP ' + probe.status + '）';
   return '连不上服务器，取不到 ' + path;
 }
 
+
+/**
+ * 依次尝试一组候选地址，任一成功即返回（失败不抛，交给调用方决定重试还是报错）
+ * @returns {Promise<{ok:boolean, val?:any, lastUrl:string, urls:string[]}>}
+ */
+async function tryUrls(file, marker, bust) {
+  const urls = libUrls(file, bust);
+  let lastUrl = '';
+  for (const url of urls) {
+    lastUrl = url;
+    try {
+      await injectScript(url);
+      if (window[marker]) return { ok: true, val: window[marker], lastUrl, urls };
+    } catch (e) { /* 换下一个候选 */ }
+  }
+  return { ok: false, lastUrl, urls };
+}
 
 /**
  * 加载一个挂全局变量的库。
@@ -96,30 +120,24 @@ async function loadLib(name, file, marker) {
       try { (0, eval)(inline.textContent); } catch (e) { /* 走网络兜底 */ }
       if (window[marker]) return window[marker];
     }
-    let lastErr = null;
-    const urls = libUrls(file);
-    for (const url of urls) {
-      try {
-        await injectScript(url);
-        if (window[marker]) return window[marker];
-        lastErr = new Error('脚本已加载但没有导出 ' + marker + '：' + url);
-      } catch (e) { lastErr = e; }
+    // 第 1 轮：常规地址（能吃到 7 天缓存，省流量）
+    let r = await tryUrls(file, marker, false);
+    if (r.ok) return r.val;
+    // 第 2 轮：每个地址加一个一次性参数，把「缓存住的 404 / 缓存住的老脚本」错开。
+    // 这一步是 v2.40 补的：文件其实在服务器上，但 CDN 把上传之前那次 404 缓存了半个多小时，
+    // 固定 URL 一直命中旧缓存 → 用户永远点不出来（而服务器上早就 200 了）。
+    r = await tryUrls(file, marker, true);
+    if (r.ok) return r.val;
+
+    // 两轮都失败 → 问一次服务器到底返回什么，拼一句能用来排查的话
+    let probedUrl = r.lastUrl || libUrls(file, true)[0];
+    let probe = await libProbe(probedUrl);
+    if (probe.kind === 'net' && r.urls.length > 1) {
+      probedUrl = r.urls[r.urls.length - 1];
+      probe = await libProbe(probedUrl);
     }
-    // 全部候选都失败：先问「最该成功的那一个」——运行时前缀推出来的 /ks/lib/...，
-    // 那才是应用自己部署的位置。站点根候选常常是别的东西（网关首页也 200 返回 HTML），
-    // 拿它当证据会指错方向。
-    if (urls.length) {
-      let probedUrl = urls[0];
-      let probe = await libProbe(probedUrl);
-      if (probe.kind === 'net' && urls.length > 1) {
-        probedUrl = urls[urls.length - 1];
-        probe = await libProbe(probedUrl);
-      }
-      throw new Error((LABEL[name] || '组件') + '加载失败：' + libErrText(probedUrl, probe)
-        + '。若刚部署过，请确认仓库里有 public/lib/ 下那两个文件。');
-    }
-    throw new Error('组件加载失败，请检查网络后重试'
-      + (lastErr ? '（' + lastErr.message + '）' : ''));
+    throw new Error((LABEL[name] || '组件') + '加载失败：' + libErrText(probedUrl, probe)
+      + '。若刚部署过，请确认仓库里有 public/lib/ 下那两个文件。');
   })();
 
   pending.set(name, task);

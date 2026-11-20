@@ -154,6 +154,38 @@ chk(/dist\/lib 里缺少|LIB_FILES/.test(fs.readFileSync(path.join(ROOT, 'script
   'D5 构建后处理会断言 dist/lib 存在（漏传则构建失败）', '');
 chk(/部署产物里没有 lib 目录/.test(assetsSrc) && /public\/lib\//.test(assetsSrc),
   'D6 加载失败时直说「部署产物里没有 lib 目录」并指向 public/lib/', '');
+// v2.40：2026-11-20 第二次事故——文件已在服务器上（200 / 437108 字节），
+// 但上传之前那次 404 被 CDN 按 ?v=1 缓存住了（X-Vercel-Cache: HIT, Age 1970s），
+// 用户点「下载模板」永远失败。修法是把版本号换成新的缓存键 + 失败后加一次性参数重试。
+chk(/const LIB_VER = '2'/.test(assetsSrc), 'D7 缓存版本号已升级（换缓存键，避开缓存的旧 404）', '');
+chk(/tryUrls\(file, marker, true\)/.test(assetsSrc) && /bust \? '&_='/.test(assetsSrc),
+  'D8 失败后自动带一次性参数重试（穿透被缓存的 404）', '');
+
+/* ---------- E. 被 CDN 缓存的 404 能自愈（v2.40） ---------- */
+// 复现 2026-11-20 现场：文件其实已在服务器上，但上传之前那次 404 被 CDN 按固定 URL
+// 缓存了（X-Vercel-Cache: HIT, Age 1970s）。修法是「带一次性参数再试一轮」。
+// 这里的桩：不带 &_ 的一律 404（模拟缓存），带 &_ 的放行（模拟源站正常）。
+console.log('\n【E】被缓存的 404 自动换地址重试');
+const page2 = await browser.newPage();
+const tries = [];
+await page2.route('**/lib/xlsx.min.js*', async (route) => {
+  const u = route.request().url();
+  tries.push(u);
+  if (/_=/.test(u)) return route.continue();
+  return route.fulfill({ status: 404, contentType: 'text/plain', body: 'NOT_FOUND' });
+});
+await page2.goto(URL_APP);
+await page2.waitForTimeout(600);
+const got2 = await page2.evaluate(async () => {
+  try {
+    const X = await window.__lazylib.ensureXLSX();
+    return { ok: !!(X && X.utils && typeof X.read === 'function') };
+  } catch (e) { return { ok: false, err: e.message }; }
+});
+chk(tries.length >= 2, 'E1 第一轮 404 后会再试一次', tries.length + ' 次');
+chk(tries.some(u => /_=/.test(u)), 'E2 重试用带一次性参数的地址（换缓存键）', '');
+chk(got2.ok, 'E3 最终仍拿到 Excel 组件（用户不该看到失败）', JSON.stringify(got2));
+await page2.close();
 
 await browser.close();
 srv.kill('SIGTERM');
